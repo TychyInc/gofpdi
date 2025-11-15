@@ -861,8 +861,10 @@ func (this *PdfReader) readXref() error {
 							predictor = v.Dictionary["/DecodeParms"].Dictionary["/Predictor"].Int
 						}
 
-						if columns > 4 || predictor > 12 {
-							return errors.New("Unsupported /DecodeParms - only tested with /Columns <= 4 and /Predictor <= 12")
+						// PDF 1.7 spec: Columns is typically 1-255
+						// Predictor: 1, 2, 10-15 are standard values
+						if columns > 255 || (predictor > 15 && predictor != 1 && predictor != 2) {
+							return errors.New("Unsupported /DecodeParms - /Columns must be <= 255 and /Predictor in valid range")
 						}
 						paethDecode = true
 					}
