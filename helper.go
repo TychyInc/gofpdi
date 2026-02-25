@@ -100,6 +100,29 @@ func abs(x int) int {
 	return (x ^ m) - m
 }
 
+// paeth implements the Paeth predictor function per PNG specification.
+func paeth(a, b, c byte) byte {
+	p := int(a) + int(b) - int(c)
+	pa := abs(p - int(a))
+	pb := abs(p - int(b))
+	pc := abs(p - int(c))
+	if pa <= pb && pa <= pc {
+		return a
+	} else if pb <= pc {
+		return b
+	}
+	return c
+}
+
+// readUintBE reads 'size' bytes from data at offset as a big-endian unsigned integer.
+func readUintBE(data []byte, offset, size int) int {
+	val := 0
+	for i := 0; i < size; i++ {
+		val = (val << 8) | int(data[offset+i])
+	}
+	return val
+}
+
 // filterPaeth applies the Paeth filter to the cdat slice.
 // cdat is the current row's data, pdat is the previous row's data.
 func filterPaeth(cdat, pdat []byte, bytesPerPixel int) {

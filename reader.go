@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"compress/zlib"
-	"encoding/binary"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -861,9 +860,10 @@ func (this *PdfReader) readXref() error {
 							predictor = v.Dictionary["/DecodeParms"].Dictionary["/Predictor"].Int
 						}
 
-						if columns > 4 || predictor > 12 {
-							return errors.New("Unsupported /DecodeParms - only tested with /Columns <= 4 and /Predictor <= 12")
+						if predictor > 15 {
+							return errors.New("Unsupported /DecodeParms - /Predictor must be <= 15")
 						}
+						_ = columns
 						paethDecode = true
 					}
 
@@ -1003,7 +1003,8 @@ func (this *PdfReader) readXref() error {
 						fieldSize++
 					}
 
-					prevRow := make([]byte, fieldSize)
+					dataSize := firstFieldSize + middleFieldSize + lastFieldSize
+					prevRow := make([]byte, dataSize)
 					for {
 						result = make([]byte, fieldSize)
 						_, err := io.ReadFull(b, result)
@@ -1015,25 +1016,49 @@ func (this *PdfReader) readXref() error {
 							}
 						}
 
+						var objectData []byte
 						if paethDecode {
-							filterPaeth(result, prevRow, fieldSize)
-							copy(prevRow, result)
-						}
+							filterType := result[0]
+							rowData := result[1:fieldSize] // data portion without filter byte
 
-						objectData := make([]byte, fieldSize)
-						if paethDecode {
-							copy(objectData, result[1:fieldSize])
+							switch filterType {
+							case 0: // None
+							case 1: // Sub
+								for si := 1; si < len(rowData); si++ {
+									rowData[si] += rowData[si-1]
+								}
+							case 2: // Up
+								for si := 0; si < len(rowData); si++ {
+									rowData[si] += prevRow[si]
+								}
+							case 3: // Average
+								for si := 0; si < len(rowData); si++ {
+									var left byte
+									if si > 0 {
+										left = rowData[si-1]
+									}
+									rowData[si] += byte((int(left) + int(prevRow[si])) / 2)
+								}
+							case 4: // Paeth
+								for si := 0; si < len(rowData); si++ {
+									var left, upperLeft byte
+									if si > 0 {
+										left = rowData[si-1]
+										upperLeft = prevRow[si-1]
+									}
+									rowData[si] += paeth(left, prevRow[si], upperLeft)
+								}
+							}
+							copy(prevRow, rowData)
+							objectData = rowData
 						} else {
-							copy(objectData, result[0:fieldSize])
+							objectData = result[0:fieldSize]
 						}
 
 						if objectData[0] == 1 {
 							// Regular objects
-							b := make([]byte, 4)
-							copy(b[4-middleFieldSize:], objectData[1:1+middleFieldSize])
-
-							objPos = int(binary.BigEndian.Uint32(b))
-							objGen = int(objectData[firstFieldSize+middleFieldSize])
+							objPos = readUintBE(objectData, firstFieldSize, middleFieldSize)
+							objGen = readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
 
 							// Append map[int]int
 							this.xref[i] = make(map[int]int, 1)
@@ -1042,11 +1067,8 @@ func (this *PdfReader) readXref() error {
 							this.xref[i][objGen] = objPos
 						} else if objectData[0] == 2 {
 							// Compressed objects
-							b := make([]byte, 4)
-							copy(b[4-middleFieldSize:], objectData[1:1+middleFieldSize])
-
-							objId := int(binary.BigEndian.Uint32(b))
-							objIdx := int(objectData[firstFieldSize+middleFieldSize])
+							objId := readUintBE(objectData, firstFieldSize, middleFieldSize)
+							objIdx := readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
 
 							// object id (i) is located in StmObj (objId) at index (objIdx)
 							this.xrefStream[i] = [2]int{objId, objIdx}
