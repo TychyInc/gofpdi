@@ -228,3 +228,19 @@ func (this *Importer) UseTemplate(tplid int, _x float64, _y float64, _w float64,
 	tplInfo := this.tplMap[tplid]
 	return tplInfo.Writer.UseTemplate(tplInfo.TemplateId, _x, _y, _w, _h)
 }
+
+// GetTemplateSize returns the natural size (in points) of an imported template
+// for a given template id (returned from ImportPage). Width and height are the
+// displayed dimensions of the page: for pages rotated 90 or 270 degrees via
+// /Rotate they are already swapped relative to the page box.
+func (this *Importer) GetTemplateSize(tplid int) (float64, float64, error) {
+	tplInfo, ok := this.tplMap[tplid]
+	if ok && tplInfo.Writer != nil && tplInfo.TemplateId >= 0 && tplInfo.TemplateId < len(tplInfo.Writer.tpls) {
+		tpl := tplInfo.Writer.tpls[tplInfo.TemplateId]
+		if tpl != nil {
+			return tpl.W, tpl.H, nil
+		}
+	}
+
+	return 0, 0, fmt.Errorf("template %d not found", tplid)
+}
