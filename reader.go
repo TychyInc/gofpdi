@@ -1743,6 +1743,8 @@ func decodeStreamFilter(token string, stream []byte) ([]byte, error) {
 		return decodeFlate(stream)
 	case "/ASCII85Decode", "/A85":
 		return decodeASCII85(stream)
+	case "/ASCIIHexDecode", "/AHx":
+		return decodeASCIIHex(stream)
 	case "/RunLengthDecode", "/RL":
 		return decodeRunLength(stream)
 	default:
@@ -1822,6 +1824,40 @@ func decodeASCII85(stream []byte) ([]byte, error) {
 		return nil, errors.New("truncated ASCII85 group")
 	}
 
+	return out, nil
+}
+
+// decodeASCIIHex ignores PDF whitespace and pads a final odd digit with zero.
+func decodeASCIIHex(stream []byte) ([]byte, error) {
+	out := make([]byte, 0, len(stream)/2)
+	high := -1
+	for _, c := range stream {
+		if c == '>' {
+			break
+		}
+		var digit int
+		switch {
+		case c == 0 || c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f':
+			continue
+		case c >= '0' && c <= '9':
+			digit = int(c - '0')
+		case c >= 'a' && c <= 'f':
+			digit = int(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			digit = int(c-'A') + 10
+		default:
+			return nil, errors.Errorf("invalid ASCIIHex character: %q", c)
+		}
+		if high < 0 {
+			high = digit
+		} else {
+			out = append(out, byte(high<<4|digit))
+			high = -1
+		}
+	}
+	if high >= 0 {
+		out = append(out, byte(high<<4))
+	}
 	return out, nil
 }
 
