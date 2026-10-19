@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 
 	"github.com/pkg/errors"
 )
@@ -466,21 +467,18 @@ func (this *PdfWriter) putImportedObjects(reader *PdfReader) error {
 	var err error
 	var nObj *PdfValue
 
-	// obj_stack will have new items added to it in the inner loop, so do another loop to check for extras
-	// TODO make the order of this the same every time
-	for {
-		atLeastOne := false
+	// obj_stack gains new entries while it is drained. Iterate in ascending
+	// object id order so the import order is predictable instead of following
+	// Go's randomized map iteration.
+	for len(this.obj_stack) > 0 {
+		keys := make([]int, 0, len(this.obj_stack))
+		for k := range this.obj_stack {
+			keys = append(keys, k)
+		}
+		sort.Ints(keys)
 
-		// FIXME:  How to determine number of objects before this loop?
-		for i := 0; i < 9999; i++ {
-			k := i
-			v := this.obj_stack[i]
-
-			if v == nil {
-				continue
-			}
-
-			atLeastOne = true
+		for _, k := range keys {
+			v := this.obj_stack[k]
 
 			nObj, err = reader.resolveObject(v)
 			if err != nil {
@@ -499,11 +497,7 @@ func (this *PdfWriter) putImportedObjects(reader *PdfReader) error {
 			this.endObj()
 
 			// Remove from stack
-			this.obj_stack[k] = nil
-		}
-
-		if !atLeastOne {
-			break
+			delete(this.obj_stack, k)
 		}
 	}
 

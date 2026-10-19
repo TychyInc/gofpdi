@@ -1,0 +1,47 @@
+#:schema https://www.schemastore.org/prek.json
+# Local commits and CI run the same checks: CI executes `prek run --all-files`.
+minimum_prek_version = "0.5.6"
+default_install_hook_types = ["pre-commit"]
+default_stages = ["pre-commit"]
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "check-merge-conflict" },
+  { id = "check-yaml" },
+  { id = "check-toml" },
+  { id = "end-of-file-fixer" },
+  { id = "trailing-whitespace", args = ["--markdown-linebreak-ext=md"] },
+  { id = "mixed-line-ending", args = ["--fix=lf"] },
+  { id = "detect-private-key" },
+  { id = "check-added-large-files", args = ["--maxkb=500"] },
+]
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "gofmt"
+name = "gofmt"
+language = "system"
+entry = "gofmt -w"
+types = ["go"]
+priority = 10
+
+[[repos.hooks]]
+id = "go-vet"
+name = "go vet"
+language = "system"
+entry = "go vet ./..."
+files = '\.go$|(^|/)go\.(mod|sum)$'
+pass_filenames = false
+priority = 20
+
+[[repos.hooks]]
+id = "go-test"
+name = "go test"
+language = "system"
+entry = "go test ./..."
+files = '\.go$|(^|/)go\.(mod|sum)$'
+pass_filenames = false
+priority = 30

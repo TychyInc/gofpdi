@@ -154,6 +154,25 @@ func (this *PdfReader) skipWhitespace(r *bufio.Reader) error {
 	return nil
 }
 
+// skipStreamWhitespace consumes the end-of-line marker that follows the
+// "stream" keyword. Unlike skipWhitespace it never skips further, because the
+// first byte of the stream data may itself be whitespace.
+func (this *PdfReader) skipStreamWhitespace(r *bufio.Reader) error {
+	b, err := r.ReadByte()
+	if err != nil {
+		return errors.Wrap(err, "Failed to read byte")
+	}
+	if b == '\r' {
+		if b2, err := r.ReadByte(); err == nil && b2 != '\n' {
+			r.UnreadByte()
+		}
+	} else if b != '\n' {
+		// No EOL where one was expected; keep the byte for the stream data.
+		r.UnreadByte()
+	}
+	return nil
+}
+
 // Read a token
 func (this *PdfReader) readToken(r *bufio.Reader) (string, error) {
 	var err error
@@ -225,8 +244,6 @@ func (this *PdfReader) readToken(r *bufio.Reader) (string, error) {
 		}
 		return str, nil
 	}
-
-	return "", nil
 }
 
 // Read a value based on a token
@@ -679,7 +696,7 @@ func (this *PdfReader) resolveObject(objSpec *PdfValue) (*PdfValue, error) {
 		if token == "stream" {
 			result.Type = PDF_TYPE_STREAM
 
-			err = this.skipWhitespace(r)
+			err = this.skipStreamWhitespace(r)
 			if err != nil {
 				return nil, errors.Wrap(err, "Failed to skip whitespace")
 			}
@@ -746,8 +763,6 @@ func (this *PdfReader) resolveObject(objSpec *PdfValue) (*PdfValue, error) {
 	} else {
 		return objSpec, nil
 	}
-
-	return &PdfValue{}, nil
 }
 
 // Find the xref offset (should be at the end of the PDF)
@@ -1032,7 +1047,7 @@ func (this *PdfReader) readXref() error {
 						return errors.New("Expected next token to be: stream, got: " + t)
 					}
 
-					err = this.skipWhitespace(r)
+					err = this.skipStreamWhitespace(r)
 					if err != nil {
 						return errors.Wrap(err, "Failed to skip whitespace")
 					}
@@ -1393,7 +1408,7 @@ func (this *PdfReader) readKids(kids *PdfValue, r int) error {
 				return errors.Wrap(err, "Failed to read kids")
 			}
 		} else {
-			return errors.Wrap(err, fmt.Sprintf("Unknown object type '%s'.  Expected: /Pages or /Page", objType))
+			return errors.Errorf("Unknown object type '%s'.  Expected: /Pages or /Page", objType)
 		}
 	}
 
