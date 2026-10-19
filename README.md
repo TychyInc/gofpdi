@@ -1,4 +1,5 @@
 # gofpdi
+[![CI](https://github.com/TychyInc/gofpdi/actions/workflows/ci.yml/badge.svg)](https://github.com/TychyInc/gofpdi/actions/workflows/ci.yml)
 [![MIT
 licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/phpdave11/gofpdi/master/LICENSE)
 [![Report](https://goreportcard.com/badge/github.com/phpdave11/gofpdi)](https://goreportcard.com/report/github.com/phpdave11/gofpdi)
@@ -202,7 +203,7 @@ func main() {
 
     pdf := gofpdf.New("P", "mm", "A4", "")
 
-    // Download a PDF into memory                                                                                                                     
+    // Download a PDF into memory  
     res, err := http.Get("https://tcpdf.org/files/examples/example_038.pdf")
     if err != nil {
         panic(err)
@@ -213,10 +214,10 @@ func main() {
         panic(err)
     }
 
-    // convert []byte to io.ReadSeeker                                                                                                                
+    // convert []byte to io.ReadSeeker  
     rs := io.ReadSeeker(bytes.NewReader(pdfBytes))
 
-    // Import in-memory PDF stream with gofpdi free pdf document importer                                                                             
+    // Import in-memory PDF stream with gofpdi free pdf document importer  
     tpl1 := gofpdi.ImportPageFromStream(pdf, &rs, 1, "/TrimBox")
 
     pdf.AddPage()
@@ -224,7 +225,7 @@ func main() {
     pdf.SetFillColor(200, 700, 220)
     pdf.Rect(20, 50, 150, 215, "F")
 
-    // Draw imported template onto page                                                                                                               
+    // Draw imported template onto page  
     gofpdi.UseImportedTemplate(pdf, tpl1, 20, 50, 150, 0)
 
     pdf.SetFont("Helvetica", "", 20)
@@ -244,3 +245,17 @@ Generated PDF:
 Screenshot of PDF:
 
 ![example.jpg](https://user-images.githubusercontent.com/9421180/62728726-18b87500-b9e2-11e9-885c-7c68b7ac6222.jpg)
+
+## Development
+
+```bash
+go test -race ./...
+```
+
+Formatting, `go vet` and the tests also run as Git hooks through
+[prek](https://github.com/j178/prek):
+
+```bash
+prek install            # once per clone
+prek run --all-files    # run the same checks as CI
+```
