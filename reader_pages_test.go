@@ -83,8 +83,11 @@ func TestGetPageResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, ok := inherited.Dictionary["/Kids"]; !ok {
-		t.Fatalf("page without /Resources should fall back to its parent: %v", inherited.Dictionary)
+	if _, ok := inherited.Dictionary["/ProcSet"]; !ok {
+		t.Fatalf("page without /Resources should inherit its parent's resources: %v", inherited.Dictionary)
+	}
+	if _, ok := inherited.Dictionary["/Kids"]; ok {
+		t.Fatal("resources must not contain the parent page-tree dictionary")
 	}
 
 	if _, err := reader.getPageResources(3); err == nil {
