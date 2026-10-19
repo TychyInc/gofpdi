@@ -859,6 +859,13 @@ func (this *PdfReader) looksLikeXref(offset int) bool {
 	return err == nil && token == "obj"
 }
 
+// hasXrefEntry includes free entries and both object storage formats.
+func (this *PdfReader) hasXrefEntry(id int) bool {
+	_, regular := this.xref[id]
+	_, compressed := this.xrefStream[id]
+	return regular || compressed
+}
+
 // Read and parse the xref table
 func (this *PdfReader) readXref() error {
 	var err error
@@ -938,7 +945,7 @@ func (this *PdfReader) readXref() error {
 					// entries by position only works for the first range; the
 					// remaining entries would be attributed to the wrong objects
 					// and their offsets resolve to a different object.
-					objectNumbers := make([]int, 0, 1)
+					ranges := make([][2]int, 0, 1)
 					if indexValue, ok := v.Dictionary["/Index"]; ok {
 						if len(indexValue.Array) < 2 || len(indexValue.Array)%2 != 0 {
 							return errors.New("Index array does not contain pairs of elements")
@@ -947,15 +954,11 @@ func (this *PdfReader) readXref() error {
 						for pair := 0; pair < len(indexValue.Array); pair += 2 {
 							first := indexValue.Array[pair].Int
 							count := indexValue.Array[pair+1].Int
-							for k := 0; k < count; k++ {
-								objectNumbers = append(objectNumbers, first+k)
-							}
+							ranges = append(ranges, [2]int{first, count})
 						}
 					} else {
 						count := v.Dictionary["/Size"].Int
-						for k := 0; k < count; k++ {
-							objectNumbers = append(objectNumbers, k)
-						}
+						ranges = append(ranges, [2]int{0, count})
 					}
 
 					prevXref := 0
@@ -1053,7 +1056,7 @@ func (this *PdfReader) readXref() error {
 
 					objPos := 0
 					objGen := 0
-					entry := 0
+					rangeIndex, rangeEntry := 0, 0
 
 					// Decode result with paeth algorithm
 					var result []byte
@@ -1069,6 +1072,22 @@ func (this *PdfReader) readXref() error {
 					}
 
 					dataSize := firstFieldSize + middleFieldSize + lastFieldSize
+					if firstFieldSize < 0 || firstFieldSize > 8 || middleFieldSize < 0 || middleFieldSize > 8 || lastFieldSize < 0 || lastFieldSize > 8 || dataSize == 0 {
+						return errors.New("Invalid xref field widths")
+					}
+					if len(p)%fieldSize != 0 {
+						return errors.New("Incomplete xref stream entry")
+					}
+					remaining := len(p) / fieldSize
+					for _, span := range ranges {
+						if span[0] < 0 || span[1] < 0 || span[1] > remaining || span[0] > int(^uint(0)>>1)-span[1] {
+							return errors.New("Invalid xref Index range")
+						}
+						remaining -= span[1]
+					}
+					if remaining != 0 {
+						return errors.New("Xref entry count does not match Index")
+					}
 					prevRow := make([]byte, dataSize)
 					for {
 						result = make([]byte, fieldSize)
@@ -1081,10 +1100,12 @@ func (this *PdfReader) readXref() error {
 							}
 						}
 
-						if entry >= len(objectNumbers) {
-							break
+						for rangeIndex < len(ranges) && rangeEntry == ranges[rangeIndex][1] {
+							rangeIndex++
+							rangeEntry = 0
 						}
-						i := objectNumbers[entry]
+						i := ranges[rangeIndex][0] + rangeEntry
+						rangeEntry++
 
 						var objectData []byte
 						if paethDecode {
@@ -1125,7 +1146,14 @@ func (this *PdfReader) readXref() error {
 							objectData = result[0:fieldSize]
 						}
 
-						if objectData[0] == 1 {
+						// A newer entry wins regardless of storage type or generation.
+						if this.hasXrefEntry(i) {
+							continue
+						}
+						if objectData[0] == 0 {
+							// Keep a tombstone so older revisions cannot revive free objects.
+							this.xref[i] = make(map[int]int)
+						} else if objectData[0] == 1 {
 							// Regular objects
 							objPos = readUintBE(objectData, firstFieldSize, middleFieldSize)
 							objGen = readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
@@ -1151,7 +1179,6 @@ func (this *PdfReader) readXref() error {
 							}
 						}
 
-						entry++
 					}
 
 					// Check for previous xref stream
@@ -1241,13 +1268,14 @@ func (this *PdfReader) readXref() error {
 			// If it already exists, that means a newer version of the object has already been added to the table.
 			// Replacing it would be using the old version of the object.
 			// https://github.com/phpdave11/gofpdi/issues/71
-			_, ok := this.xref[i]
-			if !ok {
+			if !this.hasXrefEntry(i) {
 				// Append map[int]int
 				this.xref[i] = make(map[int]int, 1)
 
 				// Set object id, generation, and position
-				this.xref[i][objGen] = objPos
+				if objStatus == "n" {
+					this.xref[i][objGen] = objPos
+				}
 			}
 		}
 	}
