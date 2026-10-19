@@ -118,6 +118,17 @@ func TestGetPageResourcesWithoutPageDictionary(t *testing.T) {
 	}
 }
 
+func TestGetPageBoxesWithTrailingDecimalPoints(t *testing.T) {
+	reader := newTestReader(t, pagesPDF("/MediaBox [0. 0. 612. 792.]", []pageSpec{{}}))
+	boxes, err := reader.getPageBoxes(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if media := boxes["/MediaBox"]; media["w"] != 612 || media["h"] != 792 {
+		t.Fatalf("MediaBox = %v, want 612x792", media)
+	}
+}
+
 func TestGetPageBoxesInheritance(t *testing.T) {
 	reader := newTestReader(t, pagesPDF("/MediaBox [0 0 595 842]", []pageSpec{{}}))
 

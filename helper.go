@@ -37,11 +37,15 @@ func is_numeric(val interface{}) bool {
 			}
 			return true
 		}
-		// 0-9,Point,Scientific
-		p, s, l := 0, 0, len(str)
+		// A decimal point may appear at either end, but is not a number alone.
+		if str == "." {
+			return false
+		}
+		// 0-9,Point,Scientific. Use -1 so a point at index 0 is recorded.
+		p, s, l := -1, 0, len(str)
 		for i, v := range str {
 			if v == '.' { // Point
-				if p > 0 || s > 0 || i+1 == l {
+				if p >= 0 || s > 0 {
 					return false
 				}
 				p = i
