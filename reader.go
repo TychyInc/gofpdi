@@ -567,6 +567,14 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 		return nil, errors.Wrap(err, "Failed to read token")
 	}
 
+	// The sub-object is parsed from an in-memory buffer, but readValue pushes the
+	// tokens it reads ahead onto the reader's stack. Those tokens belong to this
+	// buffer, not to the file stream the caller is parsing (for example the
+	// /Length of an outer stream), so keep the stack isolated.
+	savedStack := this.stack
+	this.stack = nil
+	defer func() { this.stack = savedStack }()
+
 	// Read object
 	obj, err := this.readValue(r, token)
 	if err != nil {
