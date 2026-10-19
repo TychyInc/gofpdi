@@ -128,17 +128,18 @@ func (this *PdfWriter) ImportPage(reader *PdfReader, pageno int, boxName string)
 	}
 
 	// If requested box name does not exist for this page, use an alternate box
-	if _, ok := pageBoxes[boxName]; !ok {
-		if boxName == "/BleedBox" || boxName == "/TrimBox" || boxName == "ArtBox" {
+	if len(pageBoxes[boxName]) == 0 {
+		if boxName == "/BleedBox" || boxName == "/TrimBox" || boxName == "/ArtBox" {
 			boxName = "/CropBox"
-		} else if boxName == "/CropBox" {
+		}
+		if boxName == "/CropBox" && len(pageBoxes[boxName]) == 0 {
 			boxName = "/MediaBox"
 		}
 	}
 
 	// If the requested box name or an alternate box name cannot be found, trigger an error
 	// TODO: Improve error handling
-	if _, ok := pageBoxes[boxName]; !ok {
+	if len(pageBoxes[boxName]) == 0 {
 		return -1, errors.New("Box not found: " + boxName)
 	}
 

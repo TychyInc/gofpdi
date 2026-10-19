@@ -1509,6 +1509,10 @@ func (this *PdfReader) getPageResources(pageno int) (*PdfValue, error) {
 
 // Get page content and return a slice of PdfValue objects
 func (this *PdfReader) getPageContent(objSpec *PdfValue) ([]*PdfValue, error) {
+	return this.getPageContentWithRefs(objSpec, make(map[[2]int]bool))
+}
+
+func (this *PdfReader) getPageContentWithRefs(objSpec *PdfValue, active map[[2]int]bool) ([]*PdfValue, error) {
 	var err error
 	var content *PdfValue
 
@@ -1516,16 +1520,25 @@ func (this *PdfReader) getPageContent(objSpec *PdfValue) ([]*PdfValue, error) {
 	contents := make([]*PdfValue, 0)
 
 	if objSpec.Type == PDF_TYPE_OBJREF {
-		// If objSpec is an object reference, resolve the object and append it to contents
+		ref := [2]int{objSpec.Id, objSpec.Gen}
+		if active[ref] {
+			return nil, errors.New("cyclic page content reference")
+		}
+		active[ref] = true
+		defer delete(active, ref)
+
 		content, err = this.resolveObject(objSpec)
 		if err != nil {
 			return nil, errors.Wrap(err, "Failed to resolve object")
+		}
+		if content.Value != nil && content.Value.Type == PDF_TYPE_ARRAY {
+			return this.getPageContentWithRefs(content.Value, active)
 		}
 		contents = append(contents, content)
 	} else if objSpec.Type == PDF_TYPE_ARRAY {
 		// If objSpec is an array, loop through the array and recursively get page content and append to contents
 		for i := 0; i < len(objSpec.Array); i++ {
-			tmpContents, err := this.getPageContent(objSpec.Array[i])
+			tmpContents, err := this.getPageContentWithRefs(objSpec.Array[i], active)
 			if err != nil {
 				return nil, errors.Wrap(err, "Failed to get page content")
 			}
