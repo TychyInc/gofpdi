@@ -494,24 +494,17 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 	//length := compressedObj.Value.Dictionary["/Length"].Int
 
 	// Check for filter
-	filter := ""
-	if _, ok := compressedObj.Value.Dictionary["/Filter"]; ok {
-		filter = compressedObj.Value.Dictionary["/Filter"].Token
-		if filter != "/FlateDecode" {
-			return nil, errors.New("Unsupported filter - expected /FlateDecode, got: " + filter)
-		}
+	filters, err := this.streamFilters(compressedObj)
+	if err != nil {
+		return nil, err
 	}
 
-	if filter == "/FlateDecode" {
-		// Decompress if filter is /FlateDecode
-		// Uncompress zlib compressed data
-		var out bytes.Buffer
-		zlibReader, _ := zlib.NewReader(bytes.NewBuffer(compressedObj.Stream.Bytes))
-		defer zlibReader.Close()
-		io.Copy(&out, zlibReader)
-
-		// Set stream to uncompressed data
-		compressedObj.Stream.Bytes = out.Bytes()
+	for _, filter := range filters {
+		decoded, err := decodeStreamFilter(filter.Token, compressedObj.Stream.Bytes)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to decode object stream")
+		}
+		compressedObj.Stream.Bytes = decoded
 	}
 
 	// Get io.Reader for bytes
@@ -598,10 +591,16 @@ func (this *PdfReader) resolveObject(objSpec *PdfValue) (*PdfValue, error) {
 
 	if objSpec.Type == PDF_TYPE_OBJREF {
 		// This is a reference, resolve it.
-		offset := this.xref[objSpec.Id][objSpec.Gen]
-
-		if _, ok := this.xref[objSpec.Id]; !ok {
+		generations, ok := this.xref[objSpec.Id]
+		if !ok {
 			// This may be a compressed object
+			return this.resolveCompressedObject(objSpec)
+		}
+
+		offset, ok := generations[objSpec.Gen]
+		if !ok {
+			// The generation differs from the one in the xref tables, so the
+			// object can only be stored in an object stream.
 			return this.resolveCompressedObject(objSpec)
 		}
 
@@ -766,30 +765,43 @@ func (this *PdfReader) findXref() error {
 
 	// Create new bufio.Reader
 	r := bufio.NewReader(this.f)
+	candidates := make([]int, 0, 2)
 	for {
-		// Read all tokens until "startxref" is found
+		// Read all tokens until the end of the file and keep every
+		// "startxref" position. A file with incremental updates contains one
+		// startxref per revision; only the newest one points at the current
+		// cross-reference section. Using the first one in the trailer window
+		// would parse an older revision and resolve objects to stale offsets.
 		token, err := this.readToken(r)
 		if err != nil {
 			return errors.Wrap(err, "Failed to read token")
 		}
 
-		if token == "startxref" {
-			token, err = this.readToken(r)
-			// Probably EOF before finding startxref
-			if err != nil {
-				return errors.Wrap(err, "Failed to find startxref token")
-			}
-
-			// Convert line (string) into int
-			result, err = strconv.Atoi(token)
-			if err != nil {
-				return errors.Wrap(err, "Failed to convert xref position into integer: "+token)
-			}
-
-			// Successfully read the xref position
-			this.xrefPos = result
+		// An empty token means the end of the file was reached
+		if token == "" {
 			break
 		}
+
+		if token != "startxref" {
+			continue
+		}
+
+		token, err = this.readToken(r)
+		if err != nil {
+			return errors.Wrap(err, "Failed to find startxref token")
+		}
+		if token == "" {
+			break
+		}
+
+		// Convert line (string) into int
+		result, err = strconv.Atoi(token)
+		if err != nil {
+			return errors.Wrap(err, "Failed to convert xref position into integer: "+token)
+		}
+
+		// Successfully read the xref position
+		candidates = append(candidates, result)
 	}
 
 	// Rewind file pointer
@@ -799,9 +811,59 @@ func (this *PdfReader) findXref() error {
 		return errors.Wrap(err, "Failed to set position of file")
 	}
 
-	this.xrefPos = result
+	// Take the newest position that really points at a cross-reference section.
+	// Files that were passed through a tool which appended data after %%EOF can
+	// end with a startxref that does not point at anything; falling back to the
+	// previous revision keeps them readable.
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if this.looksLikeXref(candidates[i]) {
+			this.xrefPos = candidates[i]
+			return nil
+		}
+	}
 
-	return nil
+	return errors.New("Failed to find startxref token")
+}
+
+// looksLikeXref reports whether the offset points at a cross-reference table or
+// cross-reference stream object.
+func (this *PdfReader) looksLikeXref(offset int) bool {
+	if offset <= 0 || int64(offset) >= this.nBytes {
+		return false
+	}
+
+	if _, err := this.f.Seek(int64(offset), 0); err != nil {
+		return false
+	}
+
+	r := bufio.NewReader(this.f)
+	token, err := this.readToken(r)
+	if err != nil || token == "" {
+		return false
+	}
+	if token == "xref" {
+		return true
+	}
+
+	// A cross-reference stream is an indirect object: "<num> <gen> obj"
+	if _, err := strconv.Atoi(token); err != nil {
+		return false
+	}
+	if token, err = this.readToken(r); err != nil {
+		return false
+	}
+	if _, err := strconv.Atoi(token); err != nil {
+		return false
+	}
+	token, err = this.readToken(r)
+	return err == nil && token == "obj"
+}
+
+// hasXrefEntry includes free entries and both object storage formats.
+func (this *PdfReader) hasXrefEntry(id int) bool {
+	_, regular := this.xref[id]
+	_, compressed := this.xrefStream[id]
+	return regular || compressed
 }
 
 // Read and parse the xref table
@@ -877,18 +939,26 @@ func (this *PdfReader) readXref() error {
 						}
 					*/
 
-					index := make([]int, 2)
-
-					// If /Index is not set, this is an error
-					if _, ok := v.Dictionary["/Index"]; ok {
-						if len(v.Dictionary["/Index"].Array) < 2 {
-							return errors.Wrap(err, "Index array does not contain 2 elements")
+					// /Index holds (first object number, entry count) pairs. A
+					// cross-reference stream may split its entries into several
+					// ranges, which incremental updates do often. Numbering the
+					// entries by position only works for the first range; the
+					// remaining entries would be attributed to the wrong objects
+					// and their offsets resolve to a different object.
+					ranges := make([][2]int, 0, 1)
+					if indexValue, ok := v.Dictionary["/Index"]; ok {
+						if len(indexValue.Array) < 2 || len(indexValue.Array)%2 != 0 {
+							return errors.New("Index array does not contain pairs of elements")
 						}
 
-						index[0] = v.Dictionary["/Index"].Array[0].Int
-						index[1] = v.Dictionary["/Index"].Array[1].Int
+						for pair := 0; pair < len(indexValue.Array); pair += 2 {
+							first := indexValue.Array[pair].Int
+							count := indexValue.Array[pair+1].Int
+							ranges = append(ranges, [2]int{first, count})
+						}
 					} else {
-						index[0] = 0
+						count := v.Dictionary["/Size"].Int
+						ranges = append(ranges, [2]int{0, count})
 					}
 
 					prevXref := 0
@@ -906,8 +976,6 @@ func (this *PdfReader) readXref() error {
 						// Don't return an error here.  The trailer could be in another XRef stream.
 						//return errors.New("Did not set root object")
 					}
-
-					startObject := index[0]
 
 					err = this.skipWhitespace(r)
 					if err != nil {
@@ -988,7 +1056,7 @@ func (this *PdfReader) readXref() error {
 
 					objPos := 0
 					objGen := 0
-					i := startObject
+					rangeIndex, rangeEntry := 0, 0
 
 					// Decode result with paeth algorithm
 					var result []byte
@@ -1004,6 +1072,22 @@ func (this *PdfReader) readXref() error {
 					}
 
 					dataSize := firstFieldSize + middleFieldSize + lastFieldSize
+					if firstFieldSize < 0 || firstFieldSize > 8 || middleFieldSize < 0 || middleFieldSize > 8 || lastFieldSize < 0 || lastFieldSize > 8 || dataSize == 0 {
+						return errors.New("Invalid xref field widths")
+					}
+					if len(p)%fieldSize != 0 {
+						return errors.New("Incomplete xref stream entry")
+					}
+					remaining := len(p) / fieldSize
+					for _, span := range ranges {
+						if span[0] < 0 || span[1] < 0 || span[1] > remaining || span[0] > int(^uint(0)>>1)-span[1] {
+							return errors.New("Invalid xref Index range")
+						}
+						remaining -= span[1]
+					}
+					if remaining != 0 {
+						return errors.New("Xref entry count does not match Index")
+					}
 					prevRow := make([]byte, dataSize)
 					for {
 						result = make([]byte, fieldSize)
@@ -1015,6 +1099,13 @@ func (this *PdfReader) readXref() error {
 								return errors.Wrap(err, "io.ReadFull error")
 							}
 						}
+
+						for rangeIndex < len(ranges) && rangeEntry == ranges[rangeIndex][1] {
+							rangeIndex++
+							rangeEntry = 0
+						}
+						i := ranges[rangeIndex][0] + rangeEntry
+						rangeEntry++
 
 						var objectData []byte
 						if paethDecode {
@@ -1055,16 +1146,19 @@ func (this *PdfReader) readXref() error {
 							objectData = result[0:fieldSize]
 						}
 
-						if objectData[0] == 1 {
+						// A newer entry wins regardless of storage type or generation.
+						if this.hasXrefEntry(i) {
+							continue
+						}
+						if objectData[0] == 0 {
+							// Keep a tombstone so older revisions cannot revive free objects.
+							this.xref[i] = make(map[int]int)
+						} else if objectData[0] == 1 {
 							// Regular objects
 							objPos = readUintBE(objectData, firstFieldSize, middleFieldSize)
 							objGen = readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
 
-							// Append map[int]int
-							this.xref[i] = make(map[int]int, 1)
-
-							// Set object id, generation, and position
-							this.xref[i][objGen] = objPos
+							this.xref[i] = map[int]int{objGen: objPos}
 						} else if objectData[0] == 2 {
 							// Compressed objects
 							objId := readUintBE(objectData, firstFieldSize, middleFieldSize)
@@ -1073,8 +1167,6 @@ func (this *PdfReader) readXref() error {
 							// object id (i) is located in StmObj (objId) at index (objIdx)
 							this.xrefStream[i] = [2]int{objId, objIdx}
 						}
-
-						i++
 					}
 
 					// Check for previous xref stream
@@ -1164,13 +1256,14 @@ func (this *PdfReader) readXref() error {
 			// If it already exists, that means a newer version of the object has already been added to the table.
 			// Replacing it would be using the old version of the object.
 			// https://github.com/phpdave11/gofpdi/issues/71
-			_, ok := this.xref[i]
-			if !ok {
+			if !this.hasXrefEntry(i) {
 				// Append map[int]int
 				this.xref[i] = make(map[int]int, 1)
 
 				// Set object id, generation, and position
-				this.xref[i][objGen] = objPos
+				if objStatus == "n" {
+					this.xref[i][objGen] = objPos
+				}
 			}
 		}
 	}
@@ -1414,33 +1507,9 @@ func (this *PdfReader) getContent(pageno int) (string, error) {
 // This will decode content if one or more /Filter (such as FlateDecode) is specified.
 // If there are multiple filters, they will be decoded in the order in which they were specified.
 func (this *PdfReader) rebuildContentStream(content *PdfValue) ([]byte, error) {
-	var err error
-	var tmpFilter *PdfValue
-
-	// Allocate slice of PdfValue
-	filters := make([]*PdfValue, 0)
-
-	// If content has a /Filter, append it to filters slice
-	if _, ok := content.Value.Dictionary["/Filter"]; ok {
-		filter := content.Value.Dictionary["/Filter"]
-
-		// If filter type is a reference, resolve it
-		if filter.Type == PDF_TYPE_OBJREF {
-			tmpFilter, err = this.resolveObject(filter)
-			if err != nil {
-				return nil, errors.Wrap(err, "Failed to resolve object")
-			}
-			filter = tmpFilter.Value
-		}
-
-		if filter.Type == PDF_TYPE_TOKEN {
-			// If filter type is a token (e.g. FlateDecode), appent it to filters slice
-			filters = append(filters, filter)
-		} else if filter.Type == PDF_TYPE_ARRAY {
-			// If filter type is an array, then there are multiple filters.  Set filters variable to array value.
-			filters = filter.Array
-		}
-
+	filters, err := this.streamFilters(content)
+	if err != nil {
+		return nil, err
 	}
 
 	// Set stream variable to content bytes
@@ -1448,22 +1517,179 @@ func (this *PdfReader) rebuildContentStream(content *PdfValue) ([]byte, error) {
 
 	// Loop through filters and apply each filter to stream
 	for i := 0; i < len(filters); i++ {
-		switch filters[i].Token {
-		case "/FlateDecode":
-			// Uncompress zlib compressed data
-			var out bytes.Buffer
-			zlibReader, _ := zlib.NewReader(bytes.NewBuffer(stream))
-			defer zlibReader.Close()
-			io.Copy(&out, zlibReader)
-
-			// Set stream to uncompressed data
-			stream = out.Bytes()
-		default:
-			return nil, errors.New("Unspported filter: " + filters[i].Token)
+		decoded, err := decodeStreamFilter(filters[i].Token, stream)
+		if err != nil {
+			return nil, errors.Wrap(err, "Unsupported filter: "+filters[i].Token)
 		}
+
+		// Set stream to uncompressed data
+		stream = decoded
 	}
 
 	return stream, nil
+}
+
+// streamFilters returns the /Filter entries of a stream value, resolving object
+// references and flattening a filter array into the order the filters are applied.
+func (this *PdfReader) streamFilters(value *PdfValue) ([]*PdfValue, error) {
+	filters := make([]*PdfValue, 0, 1)
+
+	filter, ok := value.Value.Dictionary["/Filter"]
+	if !ok {
+		return filters, nil
+	}
+
+	// If filter type is a reference, resolve it
+	if filter.Type == PDF_TYPE_OBJREF {
+		resolved, err := this.resolveObject(filter)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to resolve object")
+		}
+		filter = resolved.Value
+	}
+
+	switch filter.Type {
+	case PDF_TYPE_TOKEN:
+		// A single filter (e.g. /FlateDecode)
+		filters = append(filters, filter)
+	case PDF_TYPE_ARRAY:
+		// Multiple filters, applied in the order they are listed
+		for _, entry := range filter.Array {
+			if entry.Type == PDF_TYPE_OBJREF {
+				resolved, err := this.resolveObject(entry)
+				if err != nil {
+					return nil, errors.Wrap(err, "Failed to resolve filter object")
+				}
+				entry = resolved.Value
+			}
+			filters = append(filters, entry)
+		}
+	}
+
+	return filters, nil
+}
+
+// decodeStreamFilter decodes stream bytes with a single PDF filter. Only the
+// filters that can appear in page content and object streams are supported; any
+// other filter returns an error instead of panicking the caller.
+func decodeStreamFilter(token string, stream []byte) ([]byte, error) {
+	switch token {
+	case "/FlateDecode", "/Fl":
+		return decodeFlate(stream)
+	case "/ASCII85Decode", "/A85":
+		return decodeASCII85(stream)
+	case "/RunLengthDecode", "/RL":
+		return decodeRunLength(stream)
+	default:
+		return nil, errors.New("unsupported filter")
+	}
+}
+
+// decodeFlate inflates zlib compressed data. Streams written by several
+// producers end with a truncated checksum; the decompressed bytes are still
+// usable, so they are returned when some data could be read.
+func decodeFlate(stream []byte) ([]byte, error) {
+	zlibReader, err := zlib.NewReader(bytes.NewReader(stream))
+	if err != nil {
+		return nil, errors.Wrap(err, "zlib.NewReader error")
+	}
+	defer zlibReader.Close()
+
+	var out bytes.Buffer
+	if _, err := io.Copy(&out, zlibReader); err != nil && out.Len() == 0 {
+		return nil, errors.Wrap(err, "zlib read error")
+	}
+
+	return out.Bytes(), nil
+}
+
+// decodeASCII85 decodes /ASCII85Decode data, including the "z" shortcut for
+// four zero bytes and the "~>" end-of-data marker. Whitespace is ignored.
+func decodeASCII85(stream []byte) ([]byte, error) {
+	out := make([]byte, 0, len(stream))
+	var group [5]byte
+	n := 0
+
+	decodeGroup := func(count int) {
+		var value uint32
+		for i := 0; i < 5; i++ {
+			value = value*85 + uint32(group[i])
+		}
+		buf := [4]byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
+		out = append(out, buf[:count]...)
+	}
+
+	done := false
+	for i := 0; i < len(stream) && !done; i++ {
+		c := stream[i]
+		switch {
+		case c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\f' || c == 0:
+			continue
+		case c == '~':
+			// "~>" terminates the data. A lone "~" is accepted as well.
+			done = true
+			continue
+		case c == 'z':
+			if n != 0 {
+				return nil, errors.New("'z' inside an ASCII85 group")
+			}
+			out = append(out, 0, 0, 0, 0)
+			continue
+		case c < '!' || c > 'u':
+			return nil, errors.New(fmt.Sprintf("invalid ASCII85 character: %q", c))
+		}
+
+		group[n] = c - '!'
+		n++
+		if n == 5 {
+			decodeGroup(4)
+			n = 0
+		}
+	}
+
+	// A trailing partial group of n characters encodes n-1 bytes; pad with 'u'.
+	if n > 1 {
+		for i := n; i < 5; i++ {
+			group[i] = 'u' - '!'
+		}
+		decodeGroup(n - 1)
+	} else if n == 1 {
+		return nil, errors.New("truncated ASCII85 group")
+	}
+
+	return out, nil
+}
+
+// decodeRunLength decodes /RunLengthDecode data.
+func decodeRunLength(stream []byte) ([]byte, error) {
+	out := make([]byte, 0, len(stream))
+	for i := 0; i < len(stream); {
+		length := int(stream[i])
+		i++
+
+		switch {
+		case length == 128:
+			// End of data
+			return out, nil
+		case length < 128:
+			end := i + length + 1
+			if end > len(stream) {
+				end = len(stream)
+			}
+			out = append(out, stream[i:end]...)
+			i = end
+		default:
+			if i >= len(stream) {
+				return nil, errors.New("truncated run length data")
+			}
+			for k := 0; k < 257-length; k++ {
+				out = append(out, stream[i])
+			}
+			i++
+		}
+	}
+
+	return out, nil
 }
 
 func (this *PdfReader) getNumPages() (int, error) {
