@@ -6,7 +6,6 @@ import (
 	"compress/zlib"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"math"
 	"os"
 	"strconv"
@@ -1079,18 +1078,22 @@ func (this *PdfReader) readXref() error {
 						return errors.New("Expected next token to be: endobj, got: " + t)
 					}
 
-					// Now decode zlib data
-					b := bytes.NewReader(data)
-
-					z, err := zlib.NewReader(b)
+					// Decode the stream with its /Filter chain. /Filter is optional
+					// for cross-reference streams as well: qpdf with
+					// --stream-data=uncompress writes the entries as they are and
+					// drops the filter, which other readers accept.
+					filters, err := this.dictionaryFilters(v.Dictionary)
 					if err != nil {
-						return errors.Wrap(err, "zlib.NewReader error")
+						return errors.Wrap(err, "Failed to read xref stream filter")
 					}
-					defer z.Close()
 
-					p, err := ioutil.ReadAll(z)
-					if err != nil {
-						return errors.Wrap(err, "ioutil.ReadAll error")
+					p := data
+					for _, filter := range filters {
+						decoded, err := decodeStreamFilter(filter.Token, p)
+						if err != nil {
+							return errors.Wrap(err, "Failed to decode xref stream")
+						}
+						p = decoded
 					}
 
 					objPos := 0
@@ -1099,7 +1102,7 @@ func (this *PdfReader) readXref() error {
 
 					// Decode result with paeth algorithm
 					var result []byte
-					b = bytes.NewReader(p)
+					b := bytes.NewReader(p)
 
 					firstFieldSize := v.Dictionary["/W"].Array[0].Int
 					middleFieldSize := v.Dictionary["/W"].Array[1].Int
@@ -1608,9 +1611,15 @@ func (this *PdfReader) rebuildContentStream(content *PdfValue) ([]byte, error) {
 // streamFilters returns the /Filter entries of a stream value, resolving object
 // references and flattening a filter array into the order the filters are applied.
 func (this *PdfReader) streamFilters(value *PdfValue) ([]*PdfValue, error) {
+	return this.dictionaryFilters(value.Value.Dictionary)
+}
+
+// dictionaryFilters returns the /Filter entries of a stream dictionary. A stream
+// without /Filter is stored as it is, so no filters are returned.
+func (this *PdfReader) dictionaryFilters(dictionary map[string]*PdfValue) ([]*PdfValue, error) {
 	filters := make([]*PdfValue, 0, 1)
 
-	filter, ok := value.Value.Dictionary["/Filter"]
+	filter, ok := dictionary["/Filter"]
 	if !ok {
 		return filters, nil
 	}
