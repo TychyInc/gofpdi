@@ -37,7 +37,7 @@ func TestPutFormXobjectsUsesBoxOrigin(t *testing.T) {
 		4: streamObject([]byte("q Q\n"), ""),
 	}
 
-	reader := newTestReader(t, fixturePDF(t, objects))
+	reader := newTestReader(t, classicPDF(objects))
 	writer := newTestWriter(t)
 
 	if _, err := writer.ImportPage(reader, 1, "/CropBox"); err != nil {
@@ -66,7 +66,7 @@ func TestImportPageRejectsMissingResourcesObject(t *testing.T) {
 		4: streamObject([]byte("q Q\n"), ""),
 	}
 
-	reader := newTestReader(t, fixturePDF(t, objects))
+	reader := newTestReader(t, classicPDF(objects))
 	writer := newTestWriter(t)
 
 	_, err := writer.ImportPage(reader, 1, "/MediaBox")

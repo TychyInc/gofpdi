@@ -8,26 +8,6 @@ import (
 	"testing"
 )
 
-func newTestReader(t *testing.T, pdf []byte) *PdfReader {
-	t.Helper()
-
-	reader, err := NewPdfReaderFromStream("test.pdf", bytes.NewReader(pdf))
-	if err != nil {
-		t.Fatalf("failed to parse PDF: %v", err)
-	}
-	return reader
-}
-
-func newTestWriter(t *testing.T) *PdfWriter {
-	t.Helper()
-
-	writer, err := NewPdfWriter("")
-	if err != nil {
-		t.Fatalf("failed to create writer: %v", err)
-	}
-	return writer
-}
-
 func TestNewPdfWriterCreatesFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "out.pdf")
 
@@ -74,7 +54,7 @@ func TestImportPageRotations(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{dict: test.dict}})
+			pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{dict: test.dict}})
 			reader := newTestReader(t, pdf)
 			writer := newTestWriter(t)
 
@@ -124,7 +104,7 @@ func TestImportPageRotations(t *testing.T) {
 }
 
 func TestImportPageInheritsBoxes(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
 	reader := newTestReader(t, pdf)
 	writer := newTestWriter(t)
 
@@ -146,7 +126,7 @@ func TestImportPageResolvesIndirectBox(t *testing.T) {
 		4: "<< /Length 4 >>\nstream\nq Q\n\nendstream",
 		5: "[10 20 110 220]",
 	}
-	reader := newTestReader(t, fixturePDF(t, objects))
+	reader := newTestReader(t, classicPDF(objects))
 	writer := newTestWriter(t)
 
 	if _, err := writer.ImportPage(reader, 1, "/MediaBox"); err != nil {
@@ -163,7 +143,7 @@ func TestImportPageResolvesIndirectBox(t *testing.T) {
 }
 
 func TestImportPageRejectsUnknownBox(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
 	reader := newTestReader(t, pdf)
 	writer := newTestWriter(t)
 
@@ -177,7 +157,7 @@ func TestImportPageRejectsUnknownBox(t *testing.T) {
 }
 
 func TestImportPageRejectsMissingPage(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
 	reader := newTestReader(t, pdf)
 	writer := newTestWriter(t)
 
@@ -187,7 +167,7 @@ func TestImportPageRejectsMissingPage(t *testing.T) {
 }
 
 func TestGetTemplateSizeKeepsAspectRatio(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
 	reader := newTestReader(t, pdf)
 	writer := newTestWriter(t)
 
@@ -215,7 +195,7 @@ func TestGetTemplateSizeKeepsAspectRatio(t *testing.T) {
 }
 
 func TestUseTemplate(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
 	reader := newTestReader(t, pdf)
 	writer := newTestWriter(t)
 
@@ -399,7 +379,7 @@ func TestSetNextObjectID(t *testing.T) {
 }
 
 func TestClearImportedObjects(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >>", []pageSpec{{}})
 	reader := newTestReader(t, pdf)
 	writer := newTestWriter(t)
 

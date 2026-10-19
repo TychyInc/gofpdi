@@ -6,7 +6,7 @@ import (
 )
 
 func TestGetPageResourcesRejectsParentCycle(t *testing.T) {
-	reader := newTestReader(t, fixturePDF(t, map[int]string{
+	reader := newTestReader(t, classicPDF(map[int]string{
 		1: "<< /Type /Catalog /Pages 2 0 R >>",
 		2: "<< /Type /Pages /Parent 2 0 R /Kids [3 0 R] /Count 1 >>",
 		3: "<< /Type /Page /Parent 2 0 R >>",
@@ -29,7 +29,7 @@ func TestImportPageInheritsNearestResources(t *testing.T) {
 		{name: "empty page resources stop inheritance", pageResources: "/Resources << >>"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			reader := newTestReader(t, fixturePDF(t, map[int]string{
+			reader := newTestReader(t, classicPDF(map[int]string{
 				1: "<< /Type /Catalog /Pages 2 0 R >>",
 				2: "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] /Resources 5 0 R >>",
 				3: "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R] /Count 1 " + test.parentResources + " >>",

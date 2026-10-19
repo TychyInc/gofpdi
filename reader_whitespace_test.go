@@ -40,7 +40,7 @@ func TestReadPDFWithNULAndFormFeedWhitespace(t *testing.T) {
 			// Whitespace in a stream is data, not a token separator.
 			content := sep + "q Q\n"
 			objects[4] = streamObject([]byte(content), "")
-			got := readPageContent(t, fixturePDF(t, objects), 1)
+			got := readPageContent(t, classicPDF(objects), 1)
 			if got != content {
 				t.Fatalf("content = %q, want %q", got, content)
 			}
