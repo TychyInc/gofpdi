@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"sort"
+	"strconv"
 
 	"github.com/pkg/errors"
 )
@@ -272,7 +273,8 @@ func (this *PdfWriter) writeValue(value *PdfValue) {
 		break
 
 	case PDF_TYPE_REAL:
-		this.straightOut(fmt.Sprintf("%F", value.Real) + " ")
+		// Preserve precision without exponent notation, which PDF does not allow.
+		this.straightOut(strconv.FormatFloat(value.Real, 'f', -1, 64) + " ")
 		break
 
 	case PDF_TYPE_ARRAY:

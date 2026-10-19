@@ -1,6 +1,7 @@
 package gofpdi
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -154,6 +155,49 @@ func TestGetPageBoxesInheritance(t *testing.T) {
 	}
 	if all[1]["/MediaBox"]["w"] != 297.5 {
 		t.Fatalf("scaled width = %v, want 297.5", all[1]["/MediaBox"]["w"])
+	}
+}
+
+func TestPageAccessRejectsNonPositivePageNumbers(t *testing.T) {
+	reader := newTestReader(t, pagesPDF("/MediaBox [0 0 612 792]", []pageSpec{{}}))
+	for _, page := range []int{0, -1} {
+		t.Run(fmt.Sprint(page), func(t *testing.T) {
+			t.Run("boxes", func(t *testing.T) {
+				if _, err := reader.getPageBoxes(page, 1); err == nil {
+					t.Fatal("expected an error")
+				}
+			})
+			t.Run("content", func(t *testing.T) {
+				if _, err := reader.getContent(page); err == nil {
+					t.Fatal("expected an error")
+				}
+			})
+			t.Run("import", func(t *testing.T) {
+				writer, err := NewPdfWriter("")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := writer.ImportPage(reader, page, "/MediaBox"); err == nil {
+					t.Fatal("expected an error")
+				}
+			})
+			t.Run("rotation", func(t *testing.T) {
+				if _, err := reader.getPageRotation(page); err == nil {
+					t.Fatal("expected an error")
+				}
+			})
+		})
+	}
+}
+
+func TestGetPageBoxesRejectsMalformedRectangles(t *testing.T) {
+	for _, box := range []string{"[]", "[0 0 612]", "[0 0 612 792 1]"} {
+		t.Run(box, func(t *testing.T) {
+			reader := newTestReader(t, pagesPDF("/MediaBox "+box, []pageSpec{{}}))
+			if _, err := reader.getPageBoxes(1, 1); err == nil {
+				t.Fatal("expected an error for a malformed rectangle")
+			}
+		})
 	}
 }
 
