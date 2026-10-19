@@ -50,6 +50,9 @@ func TestImportPageRotations(t *testing.T) {
 		{name: "270", dict: "/Rotate 270", wantW: 842, wantH: 595, wantRotation: -270, wantMatrixLine: true},
 		// -90 rotates by 270 degrees; steps is -1 and the page is swapped.
 		{name: "negative", dict: "/Rotate -90", wantW: 842, wantH: 595, wantRotation: -270, wantMatrixLine: true},
+		// A full turn is no rotation at all, and angles above 360 are reduced.
+		{name: "360", dict: "/Rotate 360", wantW: 595, wantH: 842},
+		{name: "450", dict: "/Rotate 450", wantW: 842, wantH: 595, wantRotation: -90, wantMatrixLine: true},
 	}
 
 	for _, test := range tests {
@@ -432,5 +435,27 @@ func TestShaOfIntIsStablePerSource(t *testing.T) {
 	}
 	if first.shaOfInt(3) == first.shaOfInt(4) {
 		t.Fatal("hash should depend on the object id")
+	}
+}
+
+// TestImportPageInheritsRotation checks that a /Rotate defined on the page tree
+// applies to a page that does not set it, which is how rotated scans are often
+// written.
+func TestImportPageInheritsRotation(t *testing.T) {
+	pdf := pagesPDF("/MediaBox [0 0 595 842] /Resources << >> /Rotate 90", []pageSpec{{}})
+	reader := newTestReader(t, pdf)
+	writer := newTestWriter(t)
+
+	tplID, err := writer.ImportPage(reader, 1, "/MediaBox")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tpl := writer.tpls[tplID]
+	if tpl.Rotation != -90 {
+		t.Fatalf("rotation = %d, want -90", tpl.Rotation)
+	}
+	if tpl.W != 842 || tpl.H != 595 {
+		t.Fatalf("template size = %vx%v, want the rotated 842x595", tpl.W, tpl.H)
 	}
 }

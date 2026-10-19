@@ -111,3 +111,21 @@ func TestCompressedObjectStreamIsRejected(t *testing.T) {
 		})
 	}
 }
+
+// TestResolveObjectFallsBackToObjectStream checks the dispatch for a reference
+// whose generation is not listed in the cross-reference table: the object can
+// only be stored in an object stream, so the compressed entry is used instead
+// of reporting a missing regular object.
+func TestResolveObjectFallsBackToObjectStream(t *testing.T) {
+	reader := newTestReader(t, objectStreamPDF("/Type /ObjStm /N 1 /First 4", "4 0 ", 0))
+	// Make the table know object 4 with a different generation only.
+	reader.xref[4] = map[int]int{0: 0}
+
+	value, err := reader.resolveObject(&PdfValue{Type: PDF_TYPE_OBJREF, Id: 4, Gen: 1})
+	if err != nil {
+		t.Fatalf("failed to resolve compressed object: %v", err)
+	}
+	if value.Id != 4 || value.Value.Dictionary["/Type"].Token != "/Page" {
+		t.Fatalf("unexpected object: id=%d %+v", value.Id, value.Value.Dictionary)
+	}
+}
