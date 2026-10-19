@@ -23,12 +23,16 @@ type PdfReader struct {
 	xrefPos        int
 	xref           map[int]map[int]int
 	xrefStream     map[int][2]int
-	f              io.ReadSeeker
-	nBytes         int64
-	sourceFile     string
-	curPage        int
-	alreadyRead    bool
-	pageCount      int
+	// overrideFreeEntries allows a cross-reference stream that belongs to the
+	// same revision as the classic table (/XRefStm in a hybrid-reference file)
+	// to replace the free entries the table records for compressed objects.
+	overrideFreeEntries bool
+	f                   io.ReadSeeker
+	nBytes              int64
+	sourceFile          string
+	curPage             int
+	alreadyRead         bool
+	pageCount           int
 }
 
 func NewPdfReaderFromStream(sourceFile string, rs io.ReadSeeker) (*PdfReader, error) {
@@ -867,6 +871,18 @@ func (this *PdfReader) looksLikeXref(offset int) bool {
 	return err == nil && token == "obj"
 }
 
+// isFreeEntry reports whether an object is only known as a free entry.
+func (this *PdfReader) isFreeEntry(id int) bool {
+	generations, ok := this.xref[id]
+	if !ok {
+		return false
+	}
+	if _, compressed := this.xrefStream[id]; compressed {
+		return false
+	}
+	return len(generations) == 0
+}
+
 // hasXrefEntry includes free entries and both object storage formats.
 func (this *PdfReader) hasXrefEntry(id int) bool {
 	_, regular := this.xref[id]
@@ -1074,6 +1090,10 @@ func (this *PdfReader) readXref() error {
 					middleFieldSize := v.Dictionary["/W"].Array[1].Int
 					lastFieldSize := v.Dictionary["/W"].Array[2].Int
 
+					// /W [0 n m] omits the entry type field; every entry is a
+					// regular object in that case.
+					typeFieldOmitted := firstFieldSize == 0
+
 					fieldSize := firstFieldSize + middleFieldSize + lastFieldSize
 					if paethDecode {
 						fieldSize++
@@ -1154,20 +1174,31 @@ func (this *PdfReader) readXref() error {
 							objectData = result[0:fieldSize]
 						}
 
-						// A newer entry wins regardless of storage type or generation.
-						if this.hasXrefEntry(i) {
-							continue
+						entryType := 1
+						if !typeFieldOmitted {
+							entryType = int(objectData[0])
 						}
-						if objectData[0] == 0 {
+
+						// A newer entry wins regardless of storage type or generation.
+						// The /XRefStm of a hybrid-reference file is part of the same
+						// revision as the classic table, which recorded its compressed
+						// objects as free entries; that stream may replace them.
+						if this.hasXrefEntry(i) {
+							if !this.overrideFreeEntries || !this.isFreeEntry(i) {
+								continue
+							}
+							delete(this.xref, i)
+						}
+						if entryType == 0 {
 							// Keep a tombstone so older revisions cannot revive free objects.
 							this.xref[i] = make(map[int]int)
-						} else if objectData[0] == 1 {
+						} else if entryType == 1 {
 							// Regular objects
 							objPos = readUintBE(objectData, firstFieldSize, middleFieldSize)
 							objGen = readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
 
 							this.xref[i] = map[int]int{objGen: objPos}
-						} else if objectData[0] == 2 {
+						} else if entryType == 2 {
 							// Compressed objects
 							objId := readUintBE(objectData, firstFieldSize, middleFieldSize)
 							objIdx := readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
@@ -1180,6 +1211,7 @@ func (this *PdfReader) readXref() error {
 					// Check for previous xref stream
 					if prevXref > 0 {
 						// Set xrefPos to /Prev xref
+						this.overrideFreeEntries = false
 						this.xrefPos = prevXref
 
 						// Read preivous xref
@@ -1292,9 +1324,26 @@ func (this *PdfReader) readXref() error {
 		this.trailer = trailer
 	}
 
+	// A hybrid-reference file keeps a classic table and stores compressed objects
+	// in a cross-reference stream referenced by /XRefStm. The classic table lists
+	// those objects as free entries, so the stream has to be read as part of this
+	// revision before older revisions are merged.
+	if xrefStm, ok := trailer.Dictionary["/XRefStm"]; ok {
+		previousPos := this.xrefPos
+		this.xrefPos = xrefStm.Int
+		this.overrideFreeEntries = true
+		xrefErr := this.readXref()
+		this.overrideFreeEntries = false
+		this.xrefPos = previousPos
+		if xrefErr != nil {
+			return errors.Wrap(xrefErr, "Failed to read /XRefStm")
+		}
+	}
+
 	// If a /Prev xref trailer is specified, parse that
 	if tr, ok := trailer.Dictionary["/Prev"]; ok {
 		// Resolve parent xref table
+		this.overrideFreeEntries = false
 		this.xrefPos = tr.Int
 		return this.readXref()
 	}
@@ -1515,6 +1564,10 @@ func (this *PdfReader) getContent(pageno int) (string, error) {
 // This will decode content if one or more /Filter (such as FlateDecode) is specified.
 // If there are multiple filters, they will be decoded in the order in which they were specified.
 func (this *PdfReader) rebuildContentStream(content *PdfValue) ([]byte, error) {
+	if content.Stream == nil {
+		return nil, errors.New("content object is not a stream")
+	}
+
 	filters, err := this.streamFilters(content)
 	if err != nil {
 		return nil, err
