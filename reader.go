@@ -713,29 +713,17 @@ func (this *PdfReader) resolveObject(objSpec *PdfValue) (*PdfValue, error) {
 				return nil, errors.Wrap(err, "Failed to skip whitespace")
 			}
 
-			// Get stream length dictionary
-			lengthDict := value.Dictionary["/Length"]
-
 			// Get number of bytes of stream
-			length := lengthDict.Int
-
-			// If lengthDict is an object reference, resolve the object and set length
-			if lengthDict.Type == PDF_TYPE_OBJREF {
-				lengthDict, err = this.resolveObject(lengthDict)
-
-				if err != nil {
-					return nil, errors.Wrap(err, "Failed to resolve length object of stream")
-				}
-
-				// Set length to resolved object value
-				length = lengthDict.Value.Int
+			length, err := this.streamLength(value)
+			if err != nil {
+				return nil, err
 			}
 
 			// Read length bytes
 			bytes := make([]byte, length)
 
 			// Cannot use reader.Read() because that may not read all the bytes
-			_, err := io.ReadFull(r, bytes)
+			_, err = io.ReadFull(r, bytes)
 			if err != nil {
 				return nil, errors.Wrap(err, "Failed to read bytes from buffer")
 			}
@@ -775,6 +763,37 @@ func (this *PdfReader) resolveObject(objSpec *PdfValue) (*PdfValue, error) {
 	} else {
 		return objSpec, nil
 	}
+}
+
+// streamLength returns the /Length of a stream dictionary, resolving an
+// indirect length. The length is checked against the file size before it is
+// used to allocate the stream buffer: a missing, negative or absurd /Length
+// used to panic or abort the process with an out-of-memory error.
+func (this *PdfReader) streamLength(dict *PdfValue) (int, error) {
+	lengthValue, ok := dict.Dictionary["/Length"]
+	if !ok || lengthValue == nil {
+		return 0, errors.New("Stream dictionary has no /Length")
+	}
+
+	if lengthValue.Type == PDF_TYPE_OBJREF {
+		resolved, err := this.resolveObject(lengthValue)
+		if err != nil {
+			return 0, errors.Wrap(err, "Failed to resolve length object of stream")
+		}
+		lengthValue = resolved
+		if resolved.Type == PDF_TYPE_OBJECT {
+			lengthValue = resolved.Value
+		}
+	}
+
+	if lengthValue == nil || lengthValue.Type != PDF_TYPE_NUMERIC {
+		return 0, errors.New("Stream /Length is not an integer")
+	}
+	if lengthValue.Int < 0 || int64(lengthValue.Int) > this.nBytes {
+		return 0, errors.Errorf("Stream /Length %d is outside the file", lengthValue.Int)
+	}
+
+	return lengthValue.Int, nil
 }
 
 // Find the xref offset (should be at the end of the PDF)
@@ -1033,22 +1052,10 @@ func (this *PdfReader) readXref() error {
 						return errors.Wrap(err, "Failed to skip whitespace")
 					}
 
-					// Get stream length dictionary
-					lengthDict := v.Dictionary["/Length"]
-
 					// Get number of bytes of stream
-					length := lengthDict.Int
-
-					// If lengthDict is an object reference, resolve the object and set length
-					if lengthDict.Type == PDF_TYPE_OBJREF {
-						lengthDict, err = this.resolveObject(lengthDict)
-
-						if err != nil {
-							return errors.Wrap(err, "Failed to resolve length object of stream")
-						}
-
-						// Set length to resolved object value
-						length = lengthDict.Value.Int
+					length, err := this.streamLength(v)
+					if err != nil {
+						return err
 					}
 
 					t, err = this.readToken(r)
@@ -1068,7 +1075,7 @@ func (this *PdfReader) readXref() error {
 					data := make([]byte, length)
 
 					// Cannot use reader.Read() because that may not read all the bytes
-					_, err := io.ReadFull(r, data)
+					_, err = io.ReadFull(r, data)
 					if err != nil {
 						return errors.Wrap(err, "Failed to read bytes from buffer")
 					}

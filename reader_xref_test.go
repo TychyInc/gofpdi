@@ -162,8 +162,10 @@ func TestXrefNewestEntryWinsAcrossTypes(t *testing.T) {
 						})
 					}
 
+					pdf := b.bytes()
 					reader := &PdfReader{
-						f:          bytes.NewReader(b.bytes()),
+						f:          bytes.NewReader(pdf),
+						nBytes:     int64(len(pdf)),
 						xrefPos:    offset,
 						xref:       make(map[int]map[int]int),
 						xrefStream: make(map[int][2]int),
