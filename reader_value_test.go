@@ -96,6 +96,19 @@ func TestReadValueParsesDictionaryTypes(t *testing.T) {
 	}
 }
 
+func TestReadValueParsesDecimalNumbers(t *testing.T) {
+	value := parseValue(t, "[0. +612. -792. .5 -.25]")
+	want := []float64{0, 612, -792, 0.5, -0.25}
+	if len(value.Array) != len(want) {
+		t.Fatalf("array length = %d, want %d", len(value.Array), len(want))
+	}
+	for i, number := range want {
+		if got := value.Array[i]; got.Type != PDF_TYPE_REAL || got.Real != number {
+			t.Errorf("value[%d] = %#v, want real %g", i, got, number)
+		}
+	}
+}
+
 func TestReadValueParsesEmptyContainers(t *testing.T) {
 	dict := parseValue(t, "<< >>")
 	if dict.Type != PDF_TYPE_DICTIONARY || len(dict.Dictionary) != 0 {
