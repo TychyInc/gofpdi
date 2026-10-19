@@ -496,6 +496,13 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 	objectId := this.xrefStream[objSpec.Id][0]
 	objectIndex := this.xrefStream[objSpec.Id][1]
 
+	// An object stream is never itself stored in an object stream and always
+	// has generation 0. Requiring a regular xref entry also keeps an entry that
+	// points at its own object stream from recursing until the stack overflows.
+	if _, ok := this.xref[objectId][0]; !ok {
+		return nil, errors.Errorf("Object stream %d of object %d is not an uncompressed object", objectId, objSpec.Id)
+	}
+
 	// Read compressed object
 	compressedObjSpec := &PdfValue{Type: PDF_TYPE_OBJREF, Id: objectId, Gen: 0}
 
@@ -515,16 +522,28 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 	}
 
 	// Get number of sub-objects in compressed object
-	n := compressedObj.Value.Dictionary["/N"].Int
+	nValue, ok := compressedObj.Value.Dictionary["/N"]
+	if !ok || nValue.Type != PDF_TYPE_NUMERIC {
+		return nil, errors.New("Object stream /N is not an integer")
+	}
+	n := nValue.Int
 	if n <= 0 {
 		return nil, errors.New("No sub objects in compressed object")
 	}
+	if objectIndex < 0 || objectIndex >= n {
+		return nil, errors.Errorf("Object %d has index %d in an object stream of %d objects", objSpec.Id, objectIndex, n)
+	}
+
+	if compressedObj.Stream == nil {
+		return nil, errors.New("Object stream has no stream data")
+	}
 
 	// Get offset of first object
-	first := compressedObj.Value.Dictionary["/First"].Int
-
-	// Get length
-	//length := compressedObj.Value.Dictionary["/Length"].Int
+	firstValue, ok := compressedObj.Value.Dictionary["/First"]
+	if !ok || firstValue.Type != PDF_TYPE_NUMERIC || firstValue.Int < 0 {
+		return nil, errors.New("Object stream /First is not a non-negative integer")
+	}
+	first := firstValue.Int
 
 	// Check for filter
 	filters, err := this.streamFilters(compressedObj)
@@ -540,14 +559,23 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 		compressedObj.Stream.Bytes = decoded
 	}
 
+	// The sub-objects are parsed from an in-memory buffer, but readToken and
+	// readValue share the reader's token stack with the file stream the caller
+	// is parsing (for example the /Length of an outer stream). Keep the stack
+	// isolated for the header as well as for the object itself.
+	savedStack := this.stack
+	this.stack = nil
+	defer func() { this.stack = savedStack }()
+
 	// Get io.Reader for bytes
 	r := bufio.NewReader(bytes.NewBuffer(compressedObj.Stream.Bytes))
 
 	subObjId := 0
 	subObjPos := 0
 
-	// Read sub-object indeces and their positions within the (un)compressed object
-	for i := 0; i < n; i++ {
+	// Read sub-object indeces and their positions within the (un)compressed
+	// object. Only the header up to the requested entry is needed.
+	for i := 0; i <= objectIndex; i++ {
 		var token string
 		var _objidx int
 		var _objpos int
@@ -582,14 +610,23 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 		}
 	}
 
-	// Now create an io.ReadSeeker
-	rs := io.ReadSeeker(bytes.NewReader(compressedObj.Stream.Bytes))
+	// The xref entry and the object stream header must agree; otherwise a
+	// different object would be returned in place of the requested one.
+	if subObjId != objSpec.Id {
+		return nil, errors.Errorf("Object stream %d holds object %d at index %d, expected %d", objectId, subObjId, objectIndex, objSpec.Id)
+	}
 
 	// Determine where to seek to (sub-object position + /First)
-	seekTo := int64(subObjPos + first)
+	seekTo := int64(subObjPos) + int64(first)
+	if subObjPos < 0 || seekTo > int64(len(compressedObj.Stream.Bytes)) {
+		return nil, errors.Errorf("Object %d lies outside its object stream", objSpec.Id)
+	}
 
-	// Fast forward to the object
-	rs.Seek(seekTo, 0)
+	// Now create an io.ReadSeeker and fast forward to the object
+	rs := io.ReadSeeker(bytes.NewReader(compressedObj.Stream.Bytes))
+	if _, err := rs.Seek(seekTo, io.SeekStart); err != nil {
+		return nil, errors.Wrap(err, "Failed to seek in object stream")
+	}
 
 	// Create a new io.Reader
 	r = bufio.NewReader(rs)
@@ -599,14 +636,6 @@ func (this *PdfReader) resolveCompressedObject(objSpec *PdfValue) (*PdfValue, er
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to read token")
 	}
-
-	// The sub-object is parsed from an in-memory buffer, but readValue pushes the
-	// tokens it reads ahead onto the reader's stack. Those tokens belong to this
-	// buffer, not to the file stream the caller is parsing (for example the
-	// /Length of an outer stream), so keep the stack isolated.
-	savedStack := this.stack
-	this.stack = nil
-	defer func() { this.stack = savedStack }()
 
 	// Read object
 	obj, err := this.readValue(r, token)
