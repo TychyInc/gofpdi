@@ -25,8 +25,8 @@ Changes against upstream:
 - Cross-reference tables: hybrid-reference files (`/XRefStm`), cross-reference streams without a
   `/Type` field, cross-reference streams without `/Filter`, and compressed objects whose entry
   comes from a newer revision than the classic table.
-- Stream decoding: `/ASCII85Decode` and `/RunLengthDecode` next to `/FlateDecode`, filter chains,
-  streams with no `/Filter`, and zlib data with a truncated trailer.
+- Stream decoding: `/ASCIIHexDecode`, `/ASCII85Decode` and `/RunLengthDecode` next to
+  `/FlateDecode`, filter chains, streams with no `/Filter`, and zlib data with a truncated trailer.
 - `/DecodeParms`: `/Columns` greater than 4, and all PNG row filter types when a cross-reference
   stream uses a predictor.
 - Object streams: the token stack is isolated per object, so one object cannot corrupt the next.
@@ -36,20 +36,21 @@ Changes against upstream:
   is reported instead of overflowing the stack.
 - Damaged input: a `startxref` candidate is used only if it really points at a cross-reference
   section, field widths are limited to 8 bytes, and the entry count is taken from the decoded data.
-- Import: each page is imported with its own page boxes, and `Importer.GetTemplateSize` reports the
-  size of an imported template.
+- Import: each page is imported with its own page boxes, only `/MediaBox` and `/CropBox` are
+  inherited from the page tree, and `Importer.GetTemplateSize` reports the size of an imported
+  template.
 - Tests: regression tests for every fix above, a CI job running `go test -race ./...`, and
   [prek](https://github.com/j178/prek) Git hooks.
 
 ### Using this fork
 
 The module path stays `github.com/phpdave11/gofpdi` so that a `replace` directive works. Tags
-`v1.0.16` and later are cut in this repository (the newest one is `v1.0.19`):
+`v1.0.16` and later are cut in this repository (the newest one is `v1.0.23`):
 
 ```
 require github.com/phpdave11/gofpdi v1.0.15
 
-replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.19
+replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.23
 ```
 
 Because of that module path, `go get github.com/TychyInc/gofpdi` on its own fails with "module
