@@ -150,7 +150,7 @@ func (this *PdfReader) skipWhitespace(r *bufio.Reader) error {
 			return errors.Wrap(err, "Failed to read byte")
 		}
 
-		if b == ' ' || b == '\n' || b == '\r' || b == '\t' {
+		if b == 0 || b == '\t' || b == '\n' || b == '\f' || b == '\r' || b == ' ' {
 			continue
 		} else {
 			r.UnreadByte()
@@ -247,7 +247,7 @@ func (this *PdfReader) readToken(r *bufio.Reader) (string, error) {
 				return "", errors.Wrap(err, "Failed to read byte")
 			}
 			switch b {
-			case ' ', '%', '[', ']', '<', '>', '(', ')', '\r', '\n', '\t', '/':
+			case 0, '\t', '\n', '\f', '\r', ' ', '%', '[', ']', '<', '>', '(', ')', '/':
 				r.UnreadByte()
 				break loop
 			default:
