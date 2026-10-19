@@ -1468,55 +1468,44 @@ func (this *PdfReader) readPages() error {
 
 // Get references to page resources for a given page number
 func (this *PdfReader) getPageResources(pageno int) (*PdfValue, error) {
-	var err error
-
-	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return nil, errors.New(fmt.Sprintf("Page %d does not exist!!", pageno))
 	}
 
-	// Resolve page object
-	page, err := this.resolveObject(this.pages[pageno-1])
-	if err != nil {
-		return nil, errors.Wrap(err, "Failed to resolve page object")
-	}
-
-	// Check to see if /Resources exists in Dictionary
-	if _, ok := page.Value.Dictionary["/Resources"]; ok {
-		// Resolve /Resources object
-		res, err := this.resolveObject(page.Value.Dictionary["/Resources"])
-		if err != nil {
-			return nil, errors.Wrap(err, "Failed to resolve resources object")
-		}
-
-		// If type is PDF_TYPE_OBJECT, return its Value
-		if res.Type == PDF_TYPE_OBJECT {
-			return res.Value, nil
-		}
-
-		// Otherwise, returned the resolved object
-		return res, nil
-	} else {
-		// If /Resources does not exist, check to see if /Parent exists and return that
-		if _, ok := page.Value.Dictionary["/Parent"]; ok {
-			// Resolve parent object
-			res, err := this.resolveObject(page.Value.Dictionary["/Parent"])
-			if err != nil {
-				return nil, errors.Wrap(err, "Failed to resolve parent object")
+	// Resources are inherited from the nearest ancestor that defines them,
+	// not from the ancestor's entire page-tree dictionary.
+	seen := make(map[[2]int]bool)
+	for page := this.pages[pageno-1]; page != nil; {
+		if page.Type == PDF_TYPE_OBJREF || page.Type == PDF_TYPE_OBJECT {
+			key := [2]int{page.Id, page.Gen}
+			if seen[key] {
+				return nil, errors.New("Cycle in page resource inheritance")
 			}
-
-			// If /Parent object type is PDF_TYPE_OBJECT, return its Value
+			seen[key] = true
+		}
+		resolved, err := this.resolveObject(page)
+		if err != nil {
+			return nil, errors.Wrap(err, "Failed to resolve page resource ancestor")
+		}
+		if resolved.Type == PDF_TYPE_OBJECT {
+			resolved = resolved.Value
+		}
+		if resolved == nil || resolved.Type != PDF_TYPE_DICTIONARY {
+			return nil, errors.New("Page resource ancestor is not a dictionary")
+		}
+		if resources, ok := resolved.Dictionary["/Resources"]; ok {
+			res, err := this.resolveObject(resources)
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to resolve resources object")
+			}
 			if res.Type == PDF_TYPE_OBJECT {
 				return res.Value, nil
 			}
-
-			// Otherwise, return the resolved parent object
 			return res, nil
 		}
+		page = resolved.Dictionary["/Parent"]
 	}
 
-	// Return an empty PdfValue if we got here
-	// TODO:  Improve error handling
 	return &PdfValue{}, nil
 }
 
