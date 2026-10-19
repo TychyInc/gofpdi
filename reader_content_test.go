@@ -193,6 +193,22 @@ func TestGetPageBoxesRejectsNonArrayBox(t *testing.T) {
 	}
 }
 
+// TestReadAcceptsMissingTrailingNewline covers files whose last bytes are
+// "%%EOF" without a line ending after it.
+func TestReadAcceptsMissingTrailingNewline(t *testing.T) {
+	pdf := buildSinglePagePDF(t, "q Q\n")
+	pdf = bytes.TrimRight(pdf, "\r\n")
+
+	reader := newTestReader(t, pdf)
+	content, err := reader.getContent(1)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if content != "q Q\n" {
+		t.Fatalf("content = %q, want %q", content, "q Q\n")
+	}
+}
+
 func TestDecodeASCII85RejectsMalformedInput(t *testing.T) {
 	tests := []struct {
 		name  string

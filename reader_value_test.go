@@ -114,7 +114,7 @@ func TestReadValueParsesObjectDeclaration(t *testing.T) {
 		t.Fatalf("declaration = %#v, want 12 0 obj", declaration)
 	}
 
-	reference := parseValue(t, "7 3 R ")
+	reference := parseValue(t, "7 3 R")
 	if reference.Type != PDF_TYPE_OBJREF || reference.Id != 7 || reference.Gen != 3 {
 		t.Fatalf("reference = %#v, want 7 3 R", reference)
 	}
@@ -186,15 +186,31 @@ func TestReadTokenDistinguishesHexAndDictionary(t *testing.T) {
 }
 
 func TestReadTokenAtEOF(t *testing.T) {
-	reader := &PdfReader{}
-	r := bufio.NewReader(strings.NewReader(""))
-
-	token, err := reader.readToken(r)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty input", input: "", want: ""},
+		// A delimiter is not required after the last token in a file.
+		{name: "number", input: "12", want: "12"},
+		{name: "name", input: "/Name", want: "/Name"},
+		{name: "keyword", input: "R", want: "R"},
 	}
-	if token != "" {
-		t.Fatalf("token = %q, want an empty token at EOF", token)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			reader := &PdfReader{}
+			r := bufio.NewReader(strings.NewReader(test.input))
+
+			token, err := reader.readToken(r)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if token != test.want {
+				t.Fatalf("token = %q, want %q", token, test.want)
+			}
+		})
 	}
 }
 
@@ -206,9 +222,9 @@ func TestReadTokenSkipsComments(t *testing.T) {
 	}{
 		// A lone carriage return ends the comment; the following byte is not
 		// part of the comment even though it is not a line feed.
-		{name: "carriage return", input: "%note\rTOKEN ", want: "TOKEN"},
-		{name: "carriage return line feed", input: "%note\r\n[ ", want: "["},
-		{name: "line feed", input: "%note\nTOKEN ", want: "TOKEN"},
+		{name: "carriage return", input: "%note\rTOKEN", want: "TOKEN"},
+		{name: "carriage return line feed", input: "%note\r\n[", want: "["},
+		{name: "line feed", input: "%note\nTOKEN", want: "TOKEN"},
 	}
 
 	for _, test := range tests {
@@ -226,14 +242,20 @@ func TestReadTokenSkipsComments(t *testing.T) {
 		})
 	}
 
-	t.Run("unterminated comment", func(t *testing.T) {
-		reader := &PdfReader{}
-		r := bufio.NewReader(strings.NewReader("%note"))
+	for _, input := range []string{"%note", "%note\r"} {
+		t.Run("comment ends at EOF "+input, func(t *testing.T) {
+			reader := &PdfReader{}
+			r := bufio.NewReader(strings.NewReader(input))
 
-		if _, err := reader.readToken(r); err == nil {
-			t.Fatal("expected an error for a comment without a line ending")
-		}
-	})
+			token, err := reader.readToken(r)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if token != "" {
+				t.Fatalf("token = %q, want an empty token after a trailing comment", token)
+			}
+		})
+	}
 }
 
 func TestSkipStreamWhitespaceKeepsData(t *testing.T) {

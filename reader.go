@@ -108,6 +108,11 @@ func (this *PdfReader) skipComments(r *bufio.Reader) error {
 	for {
 		b, err = r.ReadByte()
 		if err != nil {
+			if err == io.EOF {
+				// A comment may end at EOF without a line ending; PDFs
+				// commonly end with "%%EOF" and no trailing newline.
+				return nil
+			}
 			return errors.Wrap(err, "Failed to ReadByte while skipping comments")
 		}
 
@@ -116,6 +121,9 @@ func (this *PdfReader) skipComments(r *bufio.Reader) error {
 				// Peek and see if next char is \n
 				b2, err := r.ReadByte()
 				if err != nil {
+					if err == io.EOF {
+						break
+					}
 					return errors.Wrap(err, "Failed to read byte")
 				}
 				if b2 != '\n' {
@@ -232,6 +240,11 @@ func (this *PdfReader) readToken(r *bufio.Reader) (string, error) {
 		for {
 			b, err := r.ReadByte()
 			if err != nil {
+				if err == io.EOF {
+					// A token at EOF is complete: the PDF format does not
+					// require a delimiter after the last token in a file.
+					break loop
+				}
 				return "", errors.Wrap(err, "Failed to read byte")
 			}
 			switch b {
