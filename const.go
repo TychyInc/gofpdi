@@ -15,3 +15,10 @@ const (
 	PDF_TYPE_BOOLEAN
 	PDF_TYPE_REAL
 )
+
+// maxPageTreeDepth limits how deep a /Pages node may be nested. The tree is
+// walked recursively, so a cycle (/Kids that points back at an ancestor) or a
+// pathologically deep tree would recurse until the goroutine stack overflows,
+// which is a fatal error that recover() cannot catch. 64 levels is far more
+// than any real document uses.
+const maxPageTreeDepth = 64

@@ -312,3 +312,45 @@ func TestSkipStreamWhitespaceKeepsData(t *testing.T) {
 		}
 	})
 }
+
+// TestReadValuePushesLookaheadTokensBack guards the token stack. A numeric value
+// looks ahead at the two following tokens to recognise an object declaration or
+// a reference; anything else has to be returned by the next readToken calls in
+// source order, otherwise the rest of the object is parsed in the wrong place.
+func TestReadValuePushesLookaheadTokensBack(t *testing.T) {
+	reader := &PdfReader{}
+	r := bufio.NewReader(strings.NewReader("1 2 3 /Name"))
+
+	token, err := reader.readToken(r)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	value, err := reader.readValue(r, token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if value.Type != PDF_TYPE_NUMERIC || value.Int != 1 {
+		t.Fatalf("value = %#v, want the number 1", value)
+	}
+
+	for _, want := range []string{"2", "3", "/Name", ""} {
+		got, err := reader.readToken(r)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != want {
+			t.Fatalf("token = %q, want %q", got, want)
+		}
+	}
+}
+
+// TestReadTokenRejectsLoneHexStart checks the incomplete delimiter case: "<"
+// needs a second byte to decide between a hex string and a dictionary.
+func TestReadTokenRejectsLoneHexStart(t *testing.T) {
+	reader := &PdfReader{}
+	r := bufio.NewReader(strings.NewReader("<"))
+
+	if _, err := reader.readToken(r); err == nil {
+		t.Fatal("expected an error")
+	}
+}

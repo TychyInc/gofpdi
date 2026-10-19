@@ -29,7 +29,6 @@ type PdfReader struct {
 	f                   io.ReadSeeker
 	nBytes              int64
 	sourceFile          string
-	curPage             int
 	alreadyRead         bool
 	pageCount           int
 }
@@ -1463,7 +1462,11 @@ func (this *PdfReader) readRoot() error {
 }
 
 // Read kids (pages inside a page tree)
-func (this *PdfReader) readKids(kids *PdfValue, r int) error {
+func (this *PdfReader) readKids(kids *PdfValue, depth int) error {
+	if depth > maxPageTreeDepth {
+		return errors.Errorf("Page tree is nested more than %d levels deep", maxPageTreeDepth)
+	}
+
 	// Loop through pages and add to result
 	for i := 0; i < len(kids.Array); i++ {
 		page, err := this.resolveObject(kids.Array[i])
@@ -1471,62 +1474,119 @@ func (this *PdfReader) readKids(kids *PdfValue, r int) error {
 			return errors.Wrap(err, "Failed to resolve page/pages object")
 		}
 
-		objType := page.Value.Dictionary["/Type"].Token
-		if objType == "/Page" {
-			// Set page and increment curPage
-			this.pages[this.curPage] = page
-			this.curPage++
-		} else if objType == "/Pages" {
+		// A page tree node is normally an indirect object, but a node written
+		// inline in /Kids is legal as well. Store both in the same shape so the
+		// page list has one representation.
+		if page.Type != PDF_TYPE_OBJECT {
+			page = &PdfValue{Type: PDF_TYPE_OBJECT, Value: page}
+		}
+		if page.Value == nil || page.Value.Type != PDF_TYPE_DICTIONARY {
+			return errors.New("Page tree node is not a dictionary")
+		}
+
+		objType, ok := page.Value.Dictionary["/Type"]
+		if !ok || objType == nil {
+			return errors.New("Page tree node has no /Type")
+		}
+
+		switch objType.Token {
+		case "/Page":
+			// The page list is built by walking the tree, so a /Count that
+			// disagrees with it cannot place a page out of range.
+			this.pages = append(this.pages, page)
+
+		case "/Pages":
 			// Resolve kids
-			subKids, err := this.resolveObject(page.Value.Dictionary["/Kids"])
+			subKids, err := this.kidsArray(page.Value.Dictionary["/Kids"])
 			if err != nil {
-				return errors.Wrap(err, "Failed to resolve kids")
+				return err
 			}
 
 			// Recurse into page tree
-			err = this.readKids(subKids, r+1)
+			err = this.readKids(subKids, depth+1)
 			if err != nil {
 				return errors.Wrap(err, "Failed to read kids")
 			}
-		} else {
-			return errors.Errorf("Unknown object type '%s'.  Expected: /Pages or /Page", objType)
+
+		default:
+			return errors.Errorf("Unknown object type '%s'.  Expected: /Pages or /Page", objType.Token)
 		}
 	}
 
 	return nil
 }
 
+// kidsArray resolves the /Kids entry of a page tree node and checks that it is
+// an array. /Kids is normally a direct array, but an indirect one is legal.
+func (this *PdfReader) kidsArray(kids *PdfValue) (*PdfValue, error) {
+	if kids == nil {
+		return nil, errors.New("Page tree node has no /Kids")
+	}
+
+	resolved, err := this.resolveObject(kids)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to resolve kids object")
+	}
+	if resolved.Type == PDF_TYPE_OBJECT {
+		resolved = resolved.Value
+	}
+	if resolved == nil || resolved.Type != PDF_TYPE_ARRAY {
+		return nil, errors.New("Page tree /Kids is not an array")
+	}
+
+	return resolved, nil
+}
+
+// pageCountHint returns a capacity for the page list. The number of pages is
+// counted by walking the page tree, but /Count usually gets it right and saves
+// reallocations. A missing, damaged or absurd /Count is ignored; a huge value
+// must not drive an allocation.
+func pageCountHint(count *PdfValue) int {
+	const maxHint = 1 << 16
+
+	if count == nil || count.Type != PDF_TYPE_NUMERIC {
+		return 0
+	}
+	if count.Int <= 0 || count.Int > maxHint {
+		return 0
+	}
+
+	return count.Int
+}
+
 // Read all pages in PDF
 func (this *PdfReader) readPages() error {
 	var err error
 
-	// resolve_pages_dict
+	// resolve_pages_dict. readRoot has already checked that /Pages is present.
 	pagesDict, err := this.resolveObject(this.catalog.Value.Dictionary["/Pages"])
 	if err != nil {
 		return errors.Wrap(err, "Failed to resolve pages object")
 	}
+	if pagesDict.Type == PDF_TYPE_OBJECT {
+		pagesDict = pagesDict.Value
+	}
+	if pagesDict == nil || pagesDict.Type != PDF_TYPE_DICTIONARY {
+		return errors.New("Page tree root is not a dictionary")
+	}
 
 	// This will normally return itself
-	kids, err := this.resolveObject(pagesDict.Value.Dictionary["/Kids"])
+	kids, err := this.kidsArray(pagesDict.Dictionary["/Kids"])
 	if err != nil {
-		return errors.Wrap(err, "Failed to resolve kids object")
+		return err
 	}
 
-	// Get number of pages
-	pageCount, err := this.resolveObject(pagesDict.Value.Dictionary["/Count"])
-	if err != nil {
-		return errors.Wrap(err, "Failed to get page count")
-	}
-	this.pageCount = pageCount.Int
+	// Allocate pages, then read kids. /Count is only a hint: a tree whose
+	// /Count is smaller than the number of leaf nodes used to index the page
+	// list out of range, and one whose /Count is larger left nil pages behind.
+	this.pages = make([]*PdfValue, 0, pageCountHint(pagesDict.Dictionary["/Count"]))
 
-	// Allocate pages
-	this.pages = make([]*PdfValue, pageCount.Int)
-
-	// Read kids
 	err = this.readKids(kids, 0)
 	if err != nil {
 		return errors.Wrap(err, "Failed to read kids")
 	}
+
+	this.pageCount = len(this.pages)
 
 	return nil
 }

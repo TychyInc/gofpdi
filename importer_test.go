@@ -372,3 +372,40 @@ func TestImporterFixtureObjectCount(t *testing.T) {
 		t.Fatalf("source file = %q", got)
 	}
 }
+
+// TestImporterPanicsOnBrokenInput covers the panic contract of the Importer: it
+// is the API a document generator uses, so a damaged source has to surface as a
+// panic instead of a partial import.
+func TestImporterPanicsOnBrokenInput(t *testing.T) {
+	newImporter := func(t *testing.T, pdf []byte) *Importer {
+		t.Helper()
+
+		stream := bytes.NewReader(pdf)
+		var source io.ReadSeeker = stream
+
+		importer := NewImporter()
+		importer.SetSourceStream(&source)
+		return importer
+	}
+
+	t.Run("no pages", func(t *testing.T) {
+		importer := newImporter(t, pagesPDF("", nil))
+		mustPanic(t, func() { importer.GetNumPages() })
+	})
+
+	t.Run("broken page box", func(t *testing.T) {
+		importer := newImporter(t, pagesPDF("/MediaBox [0 0 1]", []pageSpec{{}}))
+		mustPanic(t, func() { importer.GetPageSizes() })
+	})
+
+	t.Run("unresolvable resources", func(t *testing.T) {
+		importer := newImporter(t, classicPDF(map[int]string{
+			1: "<< /Type /Catalog /Pages 2 0 R >>",
+			2: "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>",
+			3: "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 99 0 R >> >> /Contents 4 0 R >>",
+			4: "<< /Length 4 >>\nstream\nq Q\n\nendstream",
+		}))
+		importer.ImportPage(1, "/MediaBox")
+		mustPanic(t, func() { importer.PutFormXobjects() })
+	})
+}

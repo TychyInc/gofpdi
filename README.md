@@ -30,6 +30,10 @@ Changes against upstream:
 - `/DecodeParms`: `/Columns` greater than 4, and all PNG row filter types when a cross-reference
   stream uses a predictor.
 - Object streams: the token stack is isolated per object, so one object cannot corrupt the next.
+- Page tree: the pages are counted by walking the tree, so a `/Count` that disagrees with it is not
+  fatal; a missing `/Kids` or `/Type`, a node that is not a dictionary, and an indirect `/Kids` are
+  reported or resolved instead of panicking, and a cycle or a tree nested more than 64 levels deep
+  is reported instead of overflowing the stack.
 - Damaged input: a `startxref` candidate is used only if it really points at a cross-reference
   section, field widths are limited to 8 bytes, and the entry count is taken from the decoded data.
 - Import: each page is imported with its own page boxes, and `Importer.GetTemplateSize` reports the
