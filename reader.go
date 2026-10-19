@@ -29,7 +29,6 @@ type PdfReader struct {
 	f                   io.ReadSeeker
 	nBytes              int64
 	sourceFile          string
-	curPage             int
 	alreadyRead         bool
 	pageCount           int
 }
@@ -1397,33 +1396,81 @@ func (this *PdfReader) readRoot() error {
 	return nil
 }
 
+// maxPageTreeDepth bounds the nesting of /Pages nodes so that a hostile page
+// tree cannot exhaust the goroutine stack, which Go cannot recover from.
+const maxPageTreeDepth = 256
+
+// maxParentChain bounds how many /Parent links are followed when looking up
+// inherited page attributes.
+const maxParentChain = maxPageTreeDepth + 1
+
+// unwrapObject returns the value of an indirect object, or the value itself.
+func unwrapObject(value *PdfValue) *PdfValue {
+	if value != nil && value.Type == PDF_TYPE_OBJECT {
+		return value.Value
+	}
+	return value
+}
+
 // Read kids (pages inside a page tree)
-func (this *PdfReader) readKids(kids *PdfValue, r int) error {
+func (this *PdfReader) readKids(kids *PdfValue, depth int, visited map[[2]int]bool) error {
+	if depth > maxPageTreeDepth {
+		return errors.New("Page tree is nested too deeply")
+	}
+
+	kids = unwrapObject(kids)
+	if kids == nil || kids.Type != PDF_TYPE_ARRAY {
+		return errors.New("Page tree /Kids is not an array")
+	}
+
 	// Loop through pages and add to result
 	for i := 0; i < len(kids.Array); i++ {
-		page, err := this.resolveObject(kids.Array[i])
+		kid := kids.Array[i]
+		if kid.Type == PDF_TYPE_OBJREF {
+			ref := [2]int{kid.Id, kid.Gen}
+			if visited[ref] {
+				return errors.New("Page tree contains a cycle")
+			}
+			visited[ref] = true
+		}
+
+		page, err := this.resolveObject(kid)
 		if err != nil {
 			return errors.Wrap(err, "Failed to resolve page/pages object")
 		}
+		node := unwrapObject(page)
+		if node == nil || node.Type != PDF_TYPE_DICTIONARY {
+			return errors.New("Page tree node is not a dictionary")
+		}
 
-		objType := page.Value.Dictionary["/Type"].Token
-		if objType == "/Page" {
-			// Set page and increment curPage
-			this.pages[this.curPage] = page
-			this.curPage++
-		} else if objType == "/Pages" {
+		// /Type is required, but some producers leave it out. Like other
+		// readers, treat a node with /Kids as an intermediate node and any
+		// other node as a page.
+		objType := ""
+		if t, ok := node.Dictionary["/Type"]; ok {
+			objType = t.Token
+		}
+		_, hasKids := node.Dictionary["/Kids"]
+
+		switch {
+		case objType == "/Pages" || (objType == "" && hasKids):
 			// Resolve kids
-			subKids, err := this.resolveObject(page.Value.Dictionary["/Kids"])
+			subKids, err := this.resolveObject(node.Dictionary["/Kids"])
 			if err != nil {
 				return errors.Wrap(err, "Failed to resolve kids")
 			}
 
 			// Recurse into page tree
-			err = this.readKids(subKids, r+1)
+			err = this.readKids(subKids, depth+1, visited)
 			if err != nil {
 				return errors.Wrap(err, "Failed to read kids")
 			}
-		} else {
+		case objType == "/Page" || objType == "":
+			if page.Type != PDF_TYPE_OBJECT {
+				return errors.New("Page object is not an indirect object")
+			}
+			this.pages = append(this.pages, page)
+		default:
 			return errors.Errorf("Unknown object type '%s'.  Expected: /Pages or /Page", objType)
 		}
 	}
@@ -1440,6 +1487,9 @@ func (this *PdfReader) readPages() error {
 	if err != nil {
 		return errors.Wrap(err, "Failed to resolve pages object")
 	}
+	if pagesDict.Value == nil || pagesDict.Value.Type != PDF_TYPE_DICTIONARY {
+		return errors.New("Page tree root is not a dictionary")
+	}
 
 	// This will normally return itself
 	kids, err := this.resolveObject(pagesDict.Value.Dictionary["/Kids"])
@@ -1447,21 +1497,20 @@ func (this *PdfReader) readPages() error {
 		return errors.Wrap(err, "Failed to resolve kids object")
 	}
 
-	// Get number of pages
-	pageCount, err := this.resolveObject(pagesDict.Value.Dictionary["/Count"])
-	if err != nil {
-		return errors.Wrap(err, "Failed to get page count")
+	// /Count of the root is often wrong in damaged files, so the pages are
+	// counted while the tree is walked instead of trusting it.
+	this.pages = make([]*PdfValue, 0)
+	visited := make(map[[2]int]bool)
+	if root := this.catalog.Value.Dictionary["/Pages"]; root.Type == PDF_TYPE_OBJREF {
+		visited[[2]int{root.Id, root.Gen}] = true
 	}
-	this.pageCount = pageCount.Int
-
-	// Allocate pages
-	this.pages = make([]*PdfValue, pageCount.Int)
 
 	// Read kids
-	err = this.readKids(kids, 0)
+	err = this.readKids(kids, 0, visited)
 	if err != nil {
 		return errors.Wrap(err, "Failed to read kids")
 	}
+	this.pageCount = len(this.pages)
 
 	return nil
 }
@@ -1559,7 +1608,7 @@ func (this *PdfReader) getContent(pageno int) (string, error) {
 	var contents []*PdfValue
 
 	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return "", errors.New(fmt.Sprintf("Page %d does not exist.", pageno))
 	}
 
@@ -1824,7 +1873,7 @@ func (this *PdfReader) getPageBoxes(pageno int, k float64) (map[string]map[strin
 	result := make(map[string]map[string]float64, len(this.availableBoxes))
 
 	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return nil, errors.New(fmt.Sprintf("Page %d does not exist?", pageno))
 	}
 
@@ -1849,56 +1898,97 @@ func (this *PdfReader) getPageBoxes(pageno int, k float64) (map[string]map[strin
 
 // Get a specific page box value (e.g. MediaBox) and return its values
 func (this *PdfReader) getPageBox(page *PdfValue, box_index string, k float64) (map[string]float64, error) {
-	var err error
-	var tmpBox *PdfValue
-
 	// Allocate 8 fields in result
 	result := make(map[string]float64, 8)
 
-	// Check to make sure box_index (e.g. MediaBox) exists in page dictionary
-	if _, ok := page.Value.Dictionary[box_index]; ok {
-		box := page.Value.Dictionary[box_index]
-
-		// If the box type is a reference, resolve it
-		if box.Type == PDF_TYPE_OBJREF {
-			tmpBox, err = this.resolveObject(box)
-			if err != nil {
-				return nil, errors.New("Failed to resolve object")
-			}
-			box = tmpBox.Value
-		}
-
-		if box.Type == PDF_TYPE_ARRAY {
-			// If the box type is an array, calculate scaled value based on k
-			result["x"] = box.Array[0].Real / k
-			result["y"] = box.Array[1].Real / k
-			result["w"] = math.Abs(box.Array[0].Real-box.Array[2].Real) / k
-			result["h"] = math.Abs(box.Array[1].Real-box.Array[3].Real) / k
-			result["llx"] = math.Min(box.Array[0].Real, box.Array[2].Real)
-			result["lly"] = math.Min(box.Array[1].Real, box.Array[3].Real)
-			result["urx"] = math.Max(box.Array[0].Real, box.Array[2].Real)
-			result["ury"] = math.Max(box.Array[1].Real, box.Array[3].Real)
-		} else {
-			// TODO: Improve error handling
-			return nil, errors.New("Could not get page box")
-		}
-	} else if _, ok := page.Value.Dictionary["/Parent"]; ok {
-		parentObj, err := this.resolveObject(page.Value.Dictionary["/Parent"])
-		if err != nil {
-			return nil, errors.Wrap(err, "Could not resolve parent object")
-		}
-
-		// If the page box is inherited from /Parent, recursively return page box of parent
-		return this.getPageBox(parentObj, box_index, k)
+	box, err := this.inheritedPageAttribute(page, box_index)
+	if err != nil {
+		return nil, err
+	}
+	if box == nil {
+		return result, nil
 	}
 
+	// If the box type is a reference, resolve it
+	if box.Type == PDF_TYPE_OBJREF {
+		tmpBox, err := this.resolveObject(box)
+		if err != nil {
+			return nil, errors.New("Failed to resolve object")
+		}
+		box = tmpBox.Value
+	}
+
+	if box == nil || box.Type != PDF_TYPE_ARRAY || len(box.Array) < 4 {
+		return nil, errors.New("Could not get page box")
+	}
+
+	coords := make([]float64, 4)
+	for i := 0; i < 4; i++ {
+		c := box.Array[i]
+		if c.Type == PDF_TYPE_OBJREF {
+			resolved, err := this.resolveObject(c)
+			if err != nil {
+				return nil, errors.Wrap(err, "Failed to resolve page box coordinate")
+			}
+			c = resolved.Value
+		}
+		if c == nil || (c.Type != PDF_TYPE_NUMERIC && c.Type != PDF_TYPE_REAL) {
+			return nil, errors.New("Page box coordinate is not a number")
+		}
+		coords[i] = c.Real
+	}
+
+	// Calculate scaled value based on k
+	result["x"] = coords[0] / k
+	result["y"] = coords[1] / k
+	result["w"] = math.Abs(coords[0]-coords[2]) / k
+	result["h"] = math.Abs(coords[1]-coords[3]) / k
+	result["llx"] = math.Min(coords[0], coords[2])
+	result["lly"] = math.Min(coords[1], coords[3])
+	result["urx"] = math.Max(coords[0], coords[2])
+	result["ury"] = math.Max(coords[1], coords[3])
+
 	return result, nil
+}
+
+// inheritedPageAttribute returns the value of key from the page or the nearest
+// /Parent that defines it, or nil when no node does. The /Parent chain is
+// followed iteratively and a cycle is reported as an error.
+func (this *PdfReader) inheritedPageAttribute(page *PdfValue, key string) (*PdfValue, error) {
+	seen := make(map[[2]int]bool)
+	for i := 0; page != nil; i++ {
+		if i > maxParentChain {
+			return nil, errors.New("Page /Parent chain is too long")
+		}
+		if page.Type == PDF_TYPE_OBJREF || page.Type == PDF_TYPE_OBJECT {
+			ref := [2]int{page.Id, page.Gen}
+			if seen[ref] {
+				return nil, errors.New("Cycle in page /Parent chain")
+			}
+			seen[ref] = true
+		}
+
+		resolved, err := this.resolveObject(page)
+		if err != nil {
+			return nil, errors.Wrap(err, "Could not resolve page tree node")
+		}
+		node := unwrapObject(resolved)
+		if node == nil || node.Type != PDF_TYPE_DICTIONARY {
+			return nil, errors.New("Page tree node is not a dictionary")
+		}
+		if value, ok := node.Dictionary[key]; ok {
+			return value, nil
+		}
+		page = node.Dictionary["/Parent"]
+	}
+
+	return nil, nil
 }
 
 // Get page rotation for a page number
 func (this *PdfReader) getPageRotation(pageno int) (*PdfValue, error) {
 	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return nil, errors.New(fmt.Sprintf("Page %d does not exist!!!!", pageno))
 	}
 
@@ -1907,48 +1997,21 @@ func (this *PdfReader) getPageRotation(pageno int) (*PdfValue, error) {
 
 // Get page rotation for a page object spec
 func (this *PdfReader) _getPageRotation(page *PdfValue) (*PdfValue, error) {
-	var err error
-
-	// Resolve page object
-	page, err = this.resolveObject(page)
+	rotate, err := this.inheritedPageAttribute(page, "/Rotate")
 	if err != nil {
-		return nil, errors.New("Failed to resolve page object")
+		return nil, errors.Wrap(err, "Failed to get page rotation")
+	}
+	if rotate == nil {
+		return &PdfValue{Int: 0}, nil
 	}
 
-	// Check to make sure /Rotate exists in page dictionary
-	if _, ok := page.Value.Dictionary["/Rotate"]; ok {
-		res, err := this.resolveObject(page.Value.Dictionary["/Rotate"])
-		if err != nil {
-			return nil, errors.New("Failed to resolve rotate object")
-		}
-
-		// If the type is PDF_TYPE_OBJECT, return its value
-		if res.Type == PDF_TYPE_OBJECT {
-			return res.Value, nil
-		}
-
-		// Otherwise, return the object
-		return res, nil
-	} else {
-		// Check to see if parent has a rotation
-		if _, ok := page.Value.Dictionary["/Parent"]; ok {
-			// Recursively return /Parent page rotation
-			res, err := this._getPageRotation(page.Value.Dictionary["/Parent"])
-			if err != nil {
-				return nil, errors.Wrap(err, "Failed to get page rotation for parent")
-			}
-
-			// If the type is PDF_TYPE_OBJECT, return its value
-			if res.Type == PDF_TYPE_OBJECT {
-				return res.Value, nil
-			}
-
-			// Otherwise, return the object
-			return res, nil
-		}
+	res, err := this.resolveObject(rotate)
+	if err != nil {
+		return nil, errors.New("Failed to resolve rotate object")
 	}
 
-	return &PdfValue{Int: 0}, nil
+	// If the type is PDF_TYPE_OBJECT, return its value
+	return unwrapObject(res), nil
 }
 
 func (this *PdfReader) read() error {
