@@ -1950,7 +1950,9 @@ func (this *PdfReader) getPageBox(page *PdfValue, box_index string, k float64) (
 			// TODO: Improve error handling
 			return nil, errors.New("Could not get page box")
 		}
-	} else if _, ok := page.Value.Dictionary["/Parent"]; ok {
+	} else if _, ok := page.Value.Dictionary["/Parent"]; ok && (box_index == "/MediaBox" || box_index == "/CropBox") {
+		// Only MediaBox and CropBox are inheritable page boxes. The other
+		// boxes default to CropBox when absent on the page itself.
 		parentObj, err := this.resolveObject(page.Value.Dictionary["/Parent"])
 		if err != nil {
 			return nil, errors.Wrap(err, "Could not resolve parent object")
