@@ -1158,27 +1158,15 @@ func (this *PdfReader) readXref() error {
 							objPos = readUintBE(objectData, firstFieldSize, middleFieldSize)
 							objGen = readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
 
-							// Xref sections are read from newest to oldest, so an entry
-							// that is already known comes from a newer section. Replacing
-							// it with an older offset would resolve the object to a stale
-							// revision (or to a different object entirely).
-							if _, ok := this.xref[i]; !ok {
-								this.xref[i] = make(map[int]int, 1)
-							}
-							if _, ok := this.xref[i][objGen]; !ok {
-								this.xref[i][objGen] = objPos
-							}
+							this.xref[i] = map[int]int{objGen: objPos}
 						} else if objectData[0] == 2 {
 							// Compressed objects
 							objId := readUintBE(objectData, firstFieldSize, middleFieldSize)
 							objIdx := readUintBE(objectData, firstFieldSize+middleFieldSize, lastFieldSize)
 
 							// object id (i) is located in StmObj (objId) at index (objIdx)
-							if _, ok := this.xrefStream[i]; !ok {
-								this.xrefStream[i] = [2]int{objId, objIdx}
-							}
+							this.xrefStream[i] = [2]int{objId, objIdx}
 						}
-
 					}
 
 					// Check for previous xref stream
