@@ -1,7 +1,7 @@
 # gofpdi
 [![CI](https://github.com/TychyInc/gofpdi/actions/workflows/ci.yml/badge.svg)](https://github.com/TychyInc/gofpdi/actions/workflows/ci.yml)
 [![MIT
-licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/phpdave11/gofpdi/master/LICENSE)
+licensed](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 [![Report](https://goreportcard.com/badge/github.com/phpdave11/gofpdi)](https://goreportcard.com/report/github.com/phpdave11/gofpdi)
 [![GoDoc](https://img.shields.io/badge/godoc-gofpdi-blue.svg)](https://godoc.org/github.com/phpdave11/gofpdi)
 
@@ -12,6 +12,45 @@ gofpdi allows you to import an existing PDF into a new PDF.  The following PDF g
 - [gopdf](https://github.com/signintech/gopdf)
 
 - [gofpdf](https://github.com/phpdave11/gofpdf)
+
+## About this fork
+
+This is the [Tychy Inc.](https://tychy.jp) fork of
+[phpdave11/gofpdi](https://github.com/phpdave11/gofpdi), used in production by our e-signature
+service, which has to import arbitrary PDFs uploaded by users. Upstream `v1.0.15` is the last
+upstream release; the changes below are what we needed on top of it.
+
+Changes against upstream:
+
+- Cross-reference tables: hybrid-reference files (`/XRefStm`), cross-reference streams without a
+  `/Type` field, cross-reference streams without `/Filter`, and compressed objects whose entry
+  comes from a newer revision than the classic table.
+- Stream decoding: `/ASCII85Decode` and `/RunLengthDecode` next to `/FlateDecode`, filter chains,
+  streams with no `/Filter`, and zlib data with a truncated trailer.
+- `/DecodeParms`: `/Columns` greater than 4, and all PNG row filter types when a cross-reference
+  stream uses a predictor.
+- Object streams: the token stack is isolated per object, so one object cannot corrupt the next.
+- Damaged input: a `startxref` candidate is used only if it really points at a cross-reference
+  section, field widths are limited to 8 bytes, and the entry count is taken from the decoded data.
+- Import: each page is imported with its own page boxes, and `Importer.GetTemplateSize` reports the
+  size of an imported template.
+- Tests: regression tests for every fix above, a CI job running `go test -race ./...`, and
+  [prek](https://github.com/j178/prek) Git hooks.
+
+### Using this fork
+
+The module path stays `github.com/phpdave11/gofpdi` so that a `replace` directive works. Tags
+`v1.0.16` and later are cut in this repository (the newest one is `v1.0.19`):
+
+```
+require github.com/phpdave11/gofpdi v1.0.15
+
+replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.19
+```
+
+Because of that module path, `go get github.com/TychyInc/gofpdi` on its own fails with "module
+declares its path as: github.com/phpdave11/gofpdi"; import the package through the replaced path
+instead.
 
 ## Acknowledgments
 This package’s code is derived from the [fpdi](https://github.com/Setasign/FPDI/tree/1.6.x-legacy) library created by [Jan Slabon](https://github.com/JanSlabon).
@@ -259,3 +298,12 @@ Formatting, `go vet` and the tests also run as Git hooks through
 prek install            # once per clone
 prek run --all-files    # run the same checks as CI
 ```
+
+The Go version in `go.mod` (currently 1.27) is required; the CI workflow follows the stable
+toolchain.
+
+## License
+
+MIT, see [LICENSE](./LICENSE). The original copyright notices are kept: the code derives from
+[FPDI](https://github.com/Setasign/FPDI/tree/1.6.x-legacy) by Jan Slabon (Setasign), and the Go
+port is by David Barnes. Modifications in this fork are copyright Tychy Inc.
