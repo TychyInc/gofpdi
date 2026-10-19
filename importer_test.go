@@ -17,7 +17,7 @@ import (
 func buildImporterFixture(t *testing.T) []byte {
 	t.Helper()
 
-	return fixturePDF(t, map[int]string{
+	return classicPDF(map[int]string{
 		1:  "<< /Type /Catalog /Pages 2 0 R >>",
 		2:  "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /MediaBox [0 0 595 842] >>",
 		3:  "<< /Type /Page /Parent 2 0 R /Rotate 90 /Resources << /Font << /F1 20 0 R >> >> /Contents 4 0 R >>",
@@ -240,7 +240,7 @@ func TestImporterPanicsOnMissingPage(t *testing.T) {
 
 func TestImporterHighObjectIDs(t *testing.T) {
 	// Object numbers above 9999 used to be dropped by putImportedObjects.
-	pdf := fixturePDF(t, map[int]string{
+	pdf := classicPDF(map[int]string{
 		1:     "<< /Type /Catalog /Pages 2 0 R >>",
 		2:     "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>",
 		3:     "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 10000 0 R >> >> /Contents 4 0 R >>",
@@ -277,7 +277,7 @@ func byteMapToStrings(objects map[*PdfObjectId][]byte) map[int]string {
 func TestPutImportedObjectsDrainsStack(t *testing.T) {
 	// Every referenced object has to be written and removed from the stack,
 	// including objects that are discovered while resolving another object.
-	pdf := fixturePDF(t, map[int]string{
+	pdf := classicPDF(map[int]string{
 		1:  "<< /Type /Catalog /Pages 2 0 R >>",
 		2:  "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>",
 		3:  "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 20 0 R /F2 21 0 R /F3 22 0 R >> >> /Contents 4 0 R >>",
@@ -337,7 +337,7 @@ func TestPutFormXobjectsRejectsInvalidTemplates(t *testing.T) {
 }
 
 func TestPutFormXobjectsWrapsResolveErrors(t *testing.T) {
-	pdf := fixturePDF(t, map[int]string{
+	pdf := classicPDF(map[int]string{
 		1: "<< /Type /Catalog /Pages 2 0 R >>",
 		2: "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>",
 		3: "<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 99 0 R >> >> /Contents 4 0 R >>",

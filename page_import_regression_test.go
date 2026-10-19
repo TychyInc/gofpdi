@@ -6,7 +6,7 @@ func TestImportPageDefaultBoxes(t *testing.T) {
 	for _, box := range []string{"/CropBox", "/BleedBox", "/TrimBox", "/ArtBox"} {
 		for _, crop := range []string{"", " /CropBox [10 20 210 320]"} {
 			t.Run(box+crop, func(t *testing.T) {
-				r := newTestReader(t, buildPagesPDF(t, "/MediaBox [0 0 595 842] /Resources << >>"+crop, []pageSpec{{}}))
+				r := newTestReader(t, pagesPDF("/MediaBox [0 0 595 842] /Resources << >>"+crop, []pageSpec{{}}))
 				w, err := NewPdfWriter("")
 				if err != nil {
 					t.Fatal(err)
@@ -31,7 +31,7 @@ func TestImportPageDefaultBoxes(t *testing.T) {
 func TestImportPageIndirectContentsArray(t *testing.T) {
 	for _, contents := range []string{"[4 0 R 4 0 R]", "[]"} {
 		t.Run(contents, func(t *testing.T) {
-			r := newTestReader(t, fixturePDF(t, map[int]string{
+			r := newTestReader(t, classicPDF(map[int]string{
 				1: "<< /Type /Catalog /Pages 2 0 R >>",
 				2: "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>",
 				3: "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 5 0 R >>",

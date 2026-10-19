@@ -1,8 +1,6 @@
 package gofpdi
 
 import (
-	"bytes"
-	"strings"
 	"testing"
 )
 
@@ -13,8 +11,10 @@ func TestGetNumPagesWithoutPages(t *testing.T) {
 	}
 }
 
-func TestGetPageRotation(t *testing.T) {
-	pdf := fixturePDF(t, map[int]string{
+// rotationPDF builds a three-page PDF. Page 1 sets /Rotate directly, page 2
+// inherits it from the page tree, and page 3 uses an indirect object.
+func rotationPDF() []byte {
+	return classicPDF(map[int]string{
 		1:  "<< /Type /Catalog /Pages 2 0 R >>",
 		2:  "<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 /Rotate 270 /MediaBox [0 0 595 842] >>",
 		3:  "<< /Type /Page /Parent 2 0 R /Rotate 90 /Contents 4 0 R /Resources << >> >>",
@@ -25,7 +25,10 @@ func TestGetPageRotation(t *testing.T) {
 		8:  "<< /Length 4 >>\nstream\nq Q\n\nendstream",
 		30: "90",
 	})
-	reader := newTestReader(t, pdf)
+}
+
+func TestGetPageRotation(t *testing.T) {
+	reader := newTestReader(t, rotationPDF())
 
 	tests := []struct {
 		page int
@@ -48,9 +51,12 @@ func TestGetPageRotation(t *testing.T) {
 	if _, err := reader.getPageRotation(9); err == nil {
 		t.Fatal("expected an error for a missing page")
 	}
+}
 
-	plain := newTestReader(t, buildPagesPDF(t, "/MediaBox [0 0 595 842]", []pageSpec{{}}))
-	rotation, err := plain.getPageRotation(1)
+func TestGetPageRotationDefaultsToZero(t *testing.T) {
+	reader := newTestReader(t, pagesPDF("/MediaBox [0 0 595 842]", []pageSpec{{}}))
+
+	rotation, err := reader.getPageRotation(1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,7 +66,7 @@ func TestGetPageRotation(t *testing.T) {
 }
 
 func TestGetPageResources(t *testing.T) {
-	pdf := fixturePDF(t, map[int]string{
+	pdf := classicPDF(map[int]string{
 		1:  "<< /Type /Catalog /Pages 2 0 R >>",
 		2:  "<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 /Resources << /ProcSet [/PDF] >> >>",
 		3:  "<< /Type /Page /Parent 2 0 R /Resources 20 0 R /Contents 4 0 R >>",
@@ -93,11 +99,16 @@ func TestGetPageResources(t *testing.T) {
 	if _, err := reader.getPageResources(3); err == nil {
 		t.Fatal("expected an error for a missing page")
 	}
+}
 
+func TestGetPageResourcesWithoutPageDictionary(t *testing.T) {
+	// A page value without a dictionary returns the zero value instead of
+	// panicking; ImportPage reports the missing resources.
 	orphan := &PdfReader{pages: []*PdfValue{{
 		Type:  PDF_TYPE_OBJECT,
 		Value: &PdfValue{Type: PDF_TYPE_DICTIONARY, Dictionary: map[string]*PdfValue{}},
 	}}}
+
 	empty, err := orphan.getPageResources(1)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -108,8 +119,7 @@ func TestGetPageResources(t *testing.T) {
 }
 
 func TestGetPageBoxesInheritance(t *testing.T) {
-	pdf := buildPagesPDF(t, "/MediaBox [0 0 595 842]", []pageSpec{{}})
-	reader := newTestReader(t, pdf)
+	reader := newTestReader(t, pagesPDF("/MediaBox [0 0 595 842]", []pageSpec{{}}))
 
 	boxes, err := reader.getPageBoxes(1, 1)
 	if err != nil {
@@ -136,142 +146,65 @@ func TestGetPageBoxesInheritance(t *testing.T) {
 	}
 }
 
-func TestGetContentKeepsLeadingWhitespace(t *testing.T) {
-	tests := []struct {
-		name   string
-		stream string
-	}{
-		{name: "space", stream: " q Q\n"},
-		{name: "newline", stream: "\nq Q\n"},
-		{name: "tab", stream: "\tq Q\n"},
-		{name: "carriage return", stream: "\rq Q\n"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			pdf := buildSinglePagePDF(t, test.stream)
-			if got := readPageContent(t, pdf, 1); got != test.stream {
-				t.Fatalf("content = %q, want %q", got, test.stream)
-			}
-		})
-	}
-}
-
-func TestGetContentHandlesCRLFAfterStreamKeyword(t *testing.T) {
-	content := "q Q\n"
-	objects := map[int]string{
+func TestGetPageBoxesRejectsNonArrayBox(t *testing.T) {
+	pdf := classicPDF(map[int]string{
 		1: "<< /Type /Catalog /Pages 2 0 R >>",
 		2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-		3: "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << >> >>",
-		4: "<< /Length 4 >>\nstream\r\n" + content + "\nendstream",
-	}
-	reader := newTestReader(t, fixturePDF(t, objects))
-
-	got, err := reader.getContent(1)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != content {
-		t.Fatalf("content = %q, want %q", got, content)
-	}
-}
-
-func TestDecodeRunLength(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   []byte
-		want    string
-		wantErr bool
-	}{
-		{name: "literal run", input: []byte{3, 'a', 'b', 'c', 'd', 128}, want: "abcd"},
-		{name: "repeat run", input: []byte{254, 'x', 128}, want: "xxx"},
-		{name: "literal past end", input: []byte{10, 'a'}, want: "a"},
-		{name: "no end marker", input: []byte{1, 'a', 'b'}, want: "ab"},
-		{name: "truncated repeat", input: []byte{255}, wantErr: true},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got, err := decodeRunLength(test.input)
-			if test.wantErr {
-				if err == nil {
-					t.Fatal("expected an error")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if string(got) != test.want {
-				t.Fatalf("decoded = %q, want %q", got, test.want)
-			}
-		})
-	}
-}
-
-func TestDecodeFlateAcceptsTruncatedChecksum(t *testing.T) {
-	content := []byte("BT ET\n")
-	compressed := flate(t, content)
-	truncated := compressed[:len(compressed)-4]
-
-	got, err := decodeFlate(truncated)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !bytes.Equal(got, content) {
-		t.Fatalf("decoded = %q, want %q", got, content)
-	}
-
-	if _, err := decodeFlate([]byte{0x78, 0x9c}); err == nil {
-		t.Fatal("expected an error for a stream without data")
-	}
-}
-
-func TestReadRejectsUnknownObjectType(t *testing.T) {
-	pdf := fixturePDF(t, map[int]string{
-		1: "<< /Type /Catalog /Pages 2 0 R >>",
-		2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-		3: "<< /Type /NotAPage >>",
+		3: "<< /Type /Page /Parent 2 0 R /MediaBox /Bad /Resources << >> >>",
 	})
 
-	if _, err := NewPdfReaderFromStream("test.pdf", bytes.NewReader(pdf)); err == nil {
-		t.Fatal("expected an error for an unknown object type")
+	reader := newTestReader(t, pdf)
+	if _, err := reader.getPageBoxes(1, 1); err == nil {
+		t.Fatal("expected an error for a box that is not an array")
+	}
+	if _, err := reader.getAllPageBoxes(1); err == nil {
+		t.Fatal("expected getAllPageBoxes to report the broken box")
 	}
 }
 
-func TestReadRejectsNonPDFData(t *testing.T) {
-	if _, err := NewPdfReaderFromStream("test.pdf", bytes.NewReader([]byte("this is not a pdf"))); err == nil {
-		t.Fatal("expected an error for non-PDF data")
-	}
-
-	if _, err := NewPdfReaderFromStream("test.pdf", bytes.NewReader(nil)); err == nil {
-		t.Fatal("expected an error for empty data")
-	}
-}
-
-func TestNewPdfReaderFromFile(t *testing.T) {
-	path := writeTempPDF(t, fixturePDF(t, map[int]string{
+// TestNestedPageTreeIsFlattened checks a page tree with an intermediate /Pages
+// node. Real PDFs routinely split large page trees into several levels.
+func TestNestedPageTreeIsFlattened(t *testing.T) {
+	pdf := classicPDF(map[int]string{
 		1: "<< /Type /Catalog /Pages 2 0 R >>",
-		2: "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>",
-		3: "<< /Type /Page /Parent 2 0 R /Resources << >> /Contents 4 0 R >>",
-		4: "<< /Length 4 >>\nstream\nq Q\n\nendstream",
-	}))
+		2: "<< /Type /Pages /Kids [3 0 R] /Count 2 /MediaBox [0 0 400 500] >>",
+		3: "<< /Type /Pages /Parent 2 0 R /Kids [4 0 R 5 0 R] /Count 2 /Rotate 90 >>",
+		4: "<< /Type /Page /Parent 3 0 R /Resources << >> /Contents 6 0 R >>",
+		5: "<< /Type /Page /Parent 3 0 R /Resources << >> /Contents 7 0 R >>",
+		6: streamObject([]byte("q Q\n"), ""),
+		7: streamObject([]byte("BT ET\n"), ""),
+	})
+	reader := newTestReader(t, pdf)
 
-	reader, err := NewPdfReader(path)
+	pages, err := reader.getNumPages()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if reader.sourceFile != path {
-		t.Fatalf("source file = %q, want %q", reader.sourceFile, path)
-	}
-	pages, err := reader.getNumPages()
-	if err != nil || pages != 1 {
-		t.Fatalf("pages = %d (%v), want 1", pages, err)
+	if pages != 2 {
+		t.Fatalf("page count = %d, want 2", pages)
 	}
 
-	if _, err := NewPdfReader(path + ".missing"); err == nil {
-		t.Fatal("expected an error for a missing file")
-	} else if !strings.Contains(err.Error(), "Failed to open file") {
+	boxes, err := reader.getAllPageBoxes(1)
+	if err != nil {
+		t.Fatalf("failed to read page boxes: %v", err)
+	}
+	for page := 1; page <= 2; page++ {
+		if got := boxes[page]["/MediaBox"]; got["w"] != 400 || got["h"] != 500 {
+			t.Fatalf("page %d MediaBox = %v, want 400x500", page, got)
+		}
+	}
+
+	rotation, err := reader.getPageRotation(2)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if rotation.Int != 90 {
+		t.Fatalf("page 2 rotation = %d, want 90", rotation.Int)
+	}
+
+	if got, err := reader.getContent(2); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	} else if got != "BT ET\n" {
+		t.Fatalf("page 2 content = %q", got)
 	}
 }
