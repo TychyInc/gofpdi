@@ -255,7 +255,27 @@ func TestWriteValue(t *testing.T) {
 		{
 			name:  "real",
 			value: &PdfValue{Type: PDF_TYPE_REAL, Real: 1.5},
-			want:  "1.500000 ",
+			want:  "1.5 ",
+		},
+		{
+			name:  "small nonzero real",
+			value: &PdfValue{Type: PDF_TYPE_REAL, Real: 0.0000001},
+			want:  "0.0000001 ",
+		},
+		{
+			name:  "negative small real",
+			value: &PdfValue{Type: PDF_TYPE_REAL, Real: -0.0000001},
+			want:  "-0.0000001 ",
+		},
+		{
+			name:  "high precision real",
+			value: &PdfValue{Type: PDF_TYPE_REAL, Real: 1.23456789},
+			want:  "1.23456789 ",
+		},
+		{
+			name:  "large real without exponent",
+			value: &PdfValue{Type: PDF_TYPE_REAL, Real: 1e20},
+			want:  "100000000000000000000 ",
 		},
 		{
 			name: "array",

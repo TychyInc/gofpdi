@@ -1559,7 +1559,7 @@ func (this *PdfReader) getContent(pageno int) (string, error) {
 	var contents []*PdfValue
 
 	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return "", errors.New(fmt.Sprintf("Page %d does not exist.", pageno))
 	}
 
@@ -1824,7 +1824,7 @@ func (this *PdfReader) getPageBoxes(pageno int, k float64) (map[string]map[strin
 	result := make(map[string]map[string]float64, len(this.availableBoxes))
 
 	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return nil, errors.New(fmt.Sprintf("Page %d does not exist?", pageno))
 	}
 
@@ -1869,6 +1869,9 @@ func (this *PdfReader) getPageBox(page *PdfValue, box_index string, k float64) (
 		}
 
 		if box.Type == PDF_TYPE_ARRAY {
+			if len(box.Array) != 4 {
+				return nil, errors.New("Page box must contain four coordinates")
+			}
 			// If the box type is an array, calculate scaled value based on k
 			result["x"] = box.Array[0].Real / k
 			result["y"] = box.Array[1].Real / k
@@ -1898,7 +1901,7 @@ func (this *PdfReader) getPageBox(page *PdfValue, box_index string, k float64) (
 // Get page rotation for a page number
 func (this *PdfReader) getPageRotation(pageno int) (*PdfValue, error) {
 	// Check to make sure page exists in pages slice
-	if len(this.pages) < pageno {
+	if pageno < 1 || len(this.pages) < pageno {
 		return nil, errors.New(fmt.Sprintf("Page %d does not exist!!!!", pageno))
 	}
 
