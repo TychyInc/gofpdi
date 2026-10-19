@@ -990,6 +990,17 @@ func (this *PdfReader) readXref() error {
 						}
 					*/
 
+					// /W gives the byte widths of the three fields of every entry
+					// and is required. It used to be indexed without checking.
+					if w, ok := v.Dictionary["/W"]; !ok || w.Type != PDF_TYPE_ARRAY || len(w.Array) != 3 {
+						return errors.New("Cross-reference stream /W is not an array of three widths")
+					}
+					for _, width := range v.Dictionary["/W"].Array {
+						if width.Type != PDF_TYPE_NUMERIC {
+							return errors.New("Cross-reference stream /W contains a non-integer width")
+						}
+					}
+
 					// /Index holds (first object number, entry count) pairs. A
 					// cross-reference stream may split its entries into several
 					// ranges, which incremental updates do often. Numbering the
@@ -1008,7 +1019,11 @@ func (this *PdfReader) readXref() error {
 							ranges = append(ranges, [2]int{first, count})
 						}
 					} else {
-						count := v.Dictionary["/Size"].Int
+						size, ok := v.Dictionary["/Size"]
+						if !ok || size.Type != PDF_TYPE_NUMERIC {
+							return errors.New("Cross-reference stream has neither /Index nor an integer /Size")
+						}
+						count := size.Int
 						ranges = append(ranges, [2]int{0, count})
 					}
 
@@ -1386,12 +1401,26 @@ func (this *PdfReader) readXref() error {
 func (this *PdfReader) readRoot() error {
 	var err error
 
+	// The trailer is only recorded when it has /Root, so a file whose trailers
+	// all lack it leaves this.trailer nil.
+	if this.trailer == nil {
+		return errors.New("Trailer has no /Root")
+	}
 	rootObjSpec := this.trailer.Dictionary["/Root"]
+	if rootObjSpec == nil || rootObjSpec.Type != PDF_TYPE_OBJREF {
+		return errors.New("Trailer /Root is not an object reference")
+	}
 
 	// Read root (catalog)
 	this.catalog, err = this.resolveObject(rootObjSpec)
 	if err != nil {
 		return errors.Wrap(err, "Failed to resolve root object")
+	}
+	if this.catalog.Value == nil || this.catalog.Value.Type != PDF_TYPE_DICTIONARY {
+		return errors.New("Document catalog is not a dictionary")
+	}
+	if _, ok := this.catalog.Value.Dictionary["/Pages"]; !ok {
+		return errors.New("Document catalog has no /Pages")
 	}
 
 	return nil
