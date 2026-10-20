@@ -26,7 +26,10 @@ Changes against upstream:
   `/Type` field, cross-reference streams without `/Filter`, and compressed objects whose entry
   comes from a newer revision than the classic table.
 - Stream decoding: `/ASCIIHexDecode`, `/ASCII85Decode` and `/RunLengthDecode` next to
-  `/FlateDecode`, filter chains, streams with no `/Filter`, and zlib data with a truncated trailer.
+  `/FlateDecode`, filter chains, streams with no `/Filter`, and zlib data with a truncated trailer;
+  a `/Filter` that is neither a name nor an array, an array entry that is not a name, and an
+  ASCII85 group that overflows 32 bits are reported as errors, while a null `/Filter` is treated
+  as an absent entry.
 - `/DecodeParms`: `/Columns` greater than 4, and all PNG row filter types when a cross-reference
   stream uses a predictor.
 - Object streams: the token stack is isolated per object, so one object cannot corrupt the next.
@@ -45,12 +48,12 @@ Changes against upstream:
 ### Using this fork
 
 The module path stays `github.com/phpdave11/gofpdi` so that a `replace` directive works. Tags
-`v1.0.16` and later are cut in this repository (the newest one is `v1.0.24`):
+`v1.0.16` and later are cut in this repository (the newest one is `v1.0.25`):
 
 ```
 require github.com/phpdave11/gofpdi v1.0.15
 
-replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.24
+replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.25
 ```
 
 Because of that module path, `go get github.com/TychyInc/gofpdi` on its own fails with "module
