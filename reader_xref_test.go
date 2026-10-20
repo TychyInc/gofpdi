@@ -294,3 +294,39 @@ func TestNewPdfReaderFromFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// appendCatalogGenerationUpdate appends an incremental update that replaces the
+// catalog with generation 1 and points /Root at it. This is how C2PA content
+// credentials are attached to an existing PDF: the signing step rewrites the
+// catalog to add /AF and leaves the previous revision in place.
+func appendCatalogGenerationUpdate(b *pdfBuilder, catalogExtra string) {
+	objOffset := b.offset()
+	fmt.Fprintf(&b.buf, "1 1 obj\n<< /Type /Catalog /Pages 2 0 R%s >>\nendobj\n", catalogExtra)
+
+	xrefOffset := b.offset()
+	fmt.Fprintf(&b.buf, "xref\n1 1\n%010d %05d n \n", objOffset, 1)
+	fmt.Fprintf(&b.buf, "trailer\n<< /Size %d /Root 1 1 R /Prev %d >>\nstartxref\n%d\n%%%%EOF\n",
+		b.size(), b.lastXref, xrefOffset)
+	b.completeSection(xrefOffset)
+}
+
+// TestReadKeepsNewestTrailerAfterCatalogGenerationChange checks that the trailer
+// of an older revision does not replace the current one. Both trailers name the
+// catalog, but the update stores it as "1 1 obj", so resolving the old "/Root 1
+// 0 R" looks for a generation that no longer exists and the whole file fails.
+func TestReadKeepsNewestTrailerAfterCatalogGenerationChange(t *testing.T) {
+	b := newClassicPDF(map[int]string{
+		1: "<< /Type /Catalog /Pages 2 0 R >>",
+		2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		3: "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 419 595] /Resources << >> >>",
+	})
+	appendCatalogGenerationUpdate(b, " /PageMode /UseNone")
+
+	pdf := b.bytes()
+	reader := newTestReader(t, pdf)
+
+	if _, ok := reader.catalog.Value.Dictionary["/PageMode"]; !ok {
+		t.Fatal("catalog of the newest revision was not used")
+	}
+	assertPageSize(t, pdf, 419, 595, "page size unreadable after catalog generation change")
+}

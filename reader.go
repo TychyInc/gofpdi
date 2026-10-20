@@ -1081,13 +1081,16 @@ func (this *PdfReader) readXref() error {
 						prevXref = v.Dictionary["/Prev"].Int
 					}
 
-					// Set root object
-					if _, ok := v.Dictionary["/Root"]; ok {
+					// Set root object. Sections reached through /Prev are older
+					// revisions, and their trailer points at the generation of the
+					// catalog they replaced (a C2PA signing step rewrites the catalog
+					// as "N 1 obj"). Keeping the first trailer read - documents are
+					// read newest first - preserves the current /Root reference.
+					// A trailer without /Root is not an error: the reference may be
+					// in another cross-reference stream.
+					if _, ok := v.Dictionary["/Root"]; ok && this.trailer == nil {
 						// Just set the whole dictionary with /Root key to keep compatibiltiy with existing code
 						this.trailer = v
-					} else {
-						// Don't return an error here.  The trailer could be in another XRef stream.
-						//return errors.New("Did not set root object")
 					}
 
 					err = this.skipWhitespace(r)
@@ -1400,8 +1403,12 @@ func (this *PdfReader) readXref() error {
 		return errors.Wrap(err, "Failed to read value for token: "+t)
 	}
 
-	// If /Root is set, then set trailer object so that /Root can be read later
-	if _, ok := trailer.Dictionary["/Root"]; ok {
+	// If /Root is set, then set trailer object so that /Root can be read later.
+	// Only the first trailer with /Root is kept: /Prev sections are older
+	// revisions and must not replace the current catalog reference, which
+	// differs from theirs when an update rewrote the catalog with a new
+	// generation number.
+	if _, ok := trailer.Dictionary["/Root"]; ok && this.trailer == nil {
 		this.trailer = trailer
 	}
 
