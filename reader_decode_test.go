@@ -15,6 +15,7 @@ func TestDecodeASCII85(t *testing.T) {
 		{name: "zero shortcut", input: "z~>", want: "\x00\x00\x00\x00"},
 		{name: "whitespace", input: "87cUR\nD]i,\"E\tbo80~>", want: "Hello World!"},
 		{name: "partial group", input: "87cUR~>", want: "Hell"},
+		{name: "maximum group", input: "s8W-!~>", want: "\xff\xff\xff\xff"},
 	}
 
 	for _, test := range tests {
@@ -38,6 +39,8 @@ func TestDecodeASCII85RejectsMalformedInput(t *testing.T) {
 		{name: "z inside a group", input: "!z~>"},
 		{name: "truncated single character", input: "!~>"},
 		{name: "invalid character", input: "v~>"},
+		{name: "overflow by one", input: "s8W-\"~>"},
+		{name: "overflow group", input: "uuuuu~>"},
 	}
 
 	for _, test := range tests {
@@ -46,6 +49,16 @@ func TestDecodeASCII85RejectsMalformedInput(t *testing.T) {
 				t.Fatal("expected an error")
 			}
 		})
+	}
+}
+
+func TestDecodeASCII85MaximumPartialGroups(t *testing.T) {
+	for n := 1; n <= 4; n++ {
+		want := bytes.Repeat([]byte{0xff}, n)
+		got, err := decodeASCII85(ascii85Bytes(want))
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("%d bytes: decoded %x, error %v; want %x", n, got, err, want)
+		}
 	}
 }
 

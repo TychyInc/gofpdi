@@ -1781,6 +1781,9 @@ func (this *PdfReader) dictionaryFilters(dictionary map[string]*PdfValue) ([]*Pd
 	}
 
 	switch filter.Type {
+	case PDF_TYPE_NULL:
+		// A null dictionary entry is equivalent to an absent entry.
+		return filters, nil
 	case PDF_TYPE_TOKEN:
 		// A single filter (e.g. /FlateDecode)
 		filters = append(filters, filter)
@@ -1794,8 +1797,13 @@ func (this *PdfReader) dictionaryFilters(dictionary map[string]*PdfValue) ([]*Pd
 				}
 				entry = resolved.Value
 			}
+			if entry.Type != PDF_TYPE_TOKEN {
+				return nil, errors.New("Stream /Filter array entry is not a name")
+			}
 			filters = append(filters, entry)
 		}
+	default:
+		return nil, errors.New("Stream /Filter is not a name or an array")
 	}
 
 	return filters, nil
@@ -1844,13 +1852,17 @@ func decodeASCII85(stream []byte) ([]byte, error) {
 	var group [5]byte
 	n := 0
 
-	decodeGroup := func(count int) {
-		var value uint32
+	decodeGroup := func(count int) error {
+		var value uint64
 		for i := 0; i < 5; i++ {
-			value = value*85 + uint32(group[i])
+			value = value*85 + uint64(group[i])
+		}
+		if value > 0xffffffff {
+			return errors.New("ASCII85 group exceeds 32 bits")
 		}
 		buf := [4]byte{byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
 		out = append(out, buf[:count]...)
+		return nil
 	}
 
 	done := false
@@ -1876,7 +1888,9 @@ func decodeASCII85(stream []byte) ([]byte, error) {
 		group[n] = c - '!'
 		n++
 		if n == 5 {
-			decodeGroup(4)
+			if err := decodeGroup(4); err != nil {
+				return nil, err
+			}
 			n = 0
 		}
 	}
@@ -1886,7 +1900,9 @@ func decodeASCII85(stream []byte) ([]byte, error) {
 		for i := n; i < 5; i++ {
 			group[i] = 'u' - '!'
 		}
-		decodeGroup(n - 1)
+		if err := decodeGroup(n - 1); err != nil {
+			return nil, err
+		}
 	} else if n == 1 {
 		return nil, errors.New("truncated ASCII85 group")
 	}
