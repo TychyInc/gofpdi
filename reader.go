@@ -2080,7 +2080,7 @@ func (this *PdfReader) getPageBoxes(pageno int, k float64) (map[string]map[strin
 	for i := 0; i < len(this.availableBoxes); i++ {
 		box, err := this.getPageBox(page, this.availableBoxes[i], k)
 		if err != nil {
-			return nil, errors.New("Failed to get page box")
+			return nil, errors.Wrap(err, "Failed to get page box")
 		}
 
 		result[this.availableBoxes[i]] = box
@@ -2091,8 +2091,22 @@ func (this *PdfReader) getPageBoxes(pageno int, k float64) (map[string]map[strin
 
 // Get a specific page box value (e.g. MediaBox) and return its values
 func (this *PdfReader) getPageBox(page *PdfValue, box_index string, k float64) (map[string]float64, error) {
+	return this.getPageBoxFrom(page, box_index, k, make(map[[2]int]bool), 0)
+}
+
+// getPageBoxFrom walks the /Parent chain for an inherited page box. seen and
+// depth are carried through the recursion so that a chain which points back at
+// an ancestor is reported instead of overflowing the goroutine stack.
+func (this *PdfReader) getPageBoxFrom(page *PdfValue, box_index string, k float64, seen map[[2]int]bool, depth int) (map[string]float64, error) {
 	var err error
 	var tmpBox *PdfValue
+
+	if err := trackPageAncestor(page, seen, depth); err != nil {
+		return nil, err
+	}
+	if page.Value == nil {
+		return nil, errors.New("Page dictionary is missing")
+	}
 
 	// Allocate 8 fields in result
 	result := make(map[string]float64, 8)
@@ -2136,10 +2150,40 @@ func (this *PdfReader) getPageBox(page *PdfValue, box_index string, k float64) (
 		}
 
 		// If the page box is inherited from /Parent, recursively return page box of parent
-		return this.getPageBox(parentObj, box_index, k)
+		return this.getPageBoxFrom(parentObj, box_index, k, seen, depth+1)
 	}
 
 	return result, nil
+}
+
+// trackPageAncestor records one step of a /Parent walk for page boxes and
+// rotation. Both are inherited from the page tree, so a /Parent that points
+// back at an ancestor recursed until the stack overflowed and took the process
+// down; a chain longer than the page tree itself can only come from a damaged or
+// crafted file.
+func trackPageAncestor(page *PdfValue, seen map[[2]int]bool, depth int) error {
+	if depth > maxPageTreeDepth {
+		return errors.Errorf("Page /Parent chain is nested more than %d levels deep", maxPageTreeDepth)
+	}
+	if page == nil {
+		return errors.New("Page dictionary is missing")
+	}
+	if page.Type != PDF_TYPE_OBJREF && page.Type != PDF_TYPE_OBJECT {
+		return nil
+	}
+	// Page tree nodes written inline have no object number; only indirect
+	// objects can form a cycle.
+	if page.Id == 0 {
+		return nil
+	}
+
+	key := [2]int{page.Id, page.Gen}
+	if seen[key] {
+		return errors.New("Cycle in page /Parent chain")
+	}
+	seen[key] = true
+
+	return nil
 }
 
 // Get page rotation for a page number
@@ -2154,12 +2198,26 @@ func (this *PdfReader) getPageRotation(pageno int) (*PdfValue, error) {
 
 // Get page rotation for a page object spec
 func (this *PdfReader) _getPageRotation(page *PdfValue) (*PdfValue, error) {
+	return this.getPageRotationFrom(page, make(map[[2]int]bool), 0)
+}
+
+// getPageRotationFrom walks the /Parent chain for an inherited /Rotate. seen and
+// depth are carried through the recursion so that a chain which points back at
+// an ancestor is reported instead of overflowing the goroutine stack.
+func (this *PdfReader) getPageRotationFrom(page *PdfValue, seen map[[2]int]bool, depth int) (*PdfValue, error) {
 	var err error
+
+	if err := trackPageAncestor(page, seen, depth); err != nil {
+		return nil, err
+	}
 
 	// Resolve page object
 	page, err = this.resolveObject(page)
 	if err != nil {
 		return nil, errors.New("Failed to resolve page object")
+	}
+	if page.Value == nil {
+		return nil, errors.New("Page dictionary is missing")
 	}
 
 	// Check to make sure /Rotate exists in page dictionary
@@ -2180,7 +2238,7 @@ func (this *PdfReader) _getPageRotation(page *PdfValue) (*PdfValue, error) {
 		// Check to see if parent has a rotation
 		if _, ok := page.Value.Dictionary["/Parent"]; ok {
 			// Recursively return /Parent page rotation
-			res, err := this._getPageRotation(page.Value.Dictionary["/Parent"])
+			res, err := this.getPageRotationFrom(page.Value.Dictionary["/Parent"], seen, depth+1)
 			if err != nil {
 				return nil, errors.Wrap(err, "Failed to get page rotation for parent")
 			}
