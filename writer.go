@@ -287,9 +287,17 @@ func (this *PdfWriter) writeValue(value *PdfValue) {
 
 	case PDF_TYPE_DICTIONARY:
 		this.straightOut("<<")
-		for k, v := range value.Dictionary {
+		// Write the entries in key order. Go's map iteration is randomized, so
+		// the same import used to produce a different byte stream on every run,
+		// which defeats comparing two imports of the same document.
+		keys := make([]string, 0, len(value.Dictionary))
+		for k := range value.Dictionary {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
 			this.straightOut(k + " ")
-			this.writeValue(v)
+			this.writeValue(value.Dictionary[k])
 		}
 		this.straightOut(">>")
 		break

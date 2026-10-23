@@ -2,6 +2,7 @@ package gofpdi
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 )
 
@@ -59,6 +60,23 @@ func TestDecodeASCII85MaximumPartialGroups(t *testing.T) {
 		if err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("%d bytes: decoded %x, error %v; want %x", n, got, err, want)
 		}
+	}
+}
+
+// TestDecodeASCII85RejectsOverflowingTrailingGroup covers the last, partial
+// group of a stream. It is padded to five characters before it is decoded, so a
+// damaged stream can encode a value above 32 bits even though every full group
+// it contains is fine.
+func TestDecodeASCII85RejectsOverflowingTrailingGroup(t *testing.T) {
+	// "u" is the highest character of the ASCII85 alphabet, so padding a short
+	// group with it pushes the decoded value past 32 bits.
+	for _, input := range []string{"uuu", "uuuu"} {
+		t.Run(input, func(t *testing.T) {
+			_, err := decodeASCII85([]byte(input))
+			if err == nil || !strings.Contains(err.Error(), "exceeds 32 bits") {
+				t.Fatalf("err = %v, want the trailing group to be rejected", err)
+			}
+		})
 	}
 }
 
