@@ -43,6 +43,9 @@ Changes against upstream:
   is reported instead of overflowing the stack.
 - Damaged input: a `startxref` candidate is used only if it really points at a cross-reference
   section, field widths are limited to 8 bytes, and the entry count is taken from the decoded data.
+- Encrypted PDFs (`/Encrypt`, including owner-password-only permission protection) are rejected with
+  `Encrypted PDF is not supported`, so the caller is not left with the zlib error an encrypted stream
+  produces.
 - Import: each page is imported with its own page boxes, only `/MediaBox` and `/CropBox` are
   inherited from the page tree, and `Importer.GetTemplateSize` reports the size of an imported
   template.
