@@ -1454,6 +1454,22 @@ func (this *PdfReader) readXref() error {
 	return nil
 }
 
+// checkEncrypted reports PDFs that declare an /Encrypt dictionary. Encrypting the
+// streams is the default, so the importer cannot read the content; permission
+// protection with an owner password also sets /Encrypt and is unsupported for the
+// same reason.
+func (this *PdfReader) checkEncrypted() error {
+	if this.trailer == nil {
+		return nil
+	}
+
+	if _, ok := this.trailer.Dictionary["/Encrypt"]; ok {
+		return errors.New("Encrypted PDF is not supported")
+	}
+
+	return nil
+}
+
 // Read root (catalog object)
 func (this *PdfReader) readRoot() error {
 	var err error
@@ -2197,6 +2213,13 @@ func (this *PdfReader) read() error {
 		err = this.readXref()
 		if err != nil {
 			return errors.Wrap(err, "Failed to read xref table")
+		}
+
+		// Encrypted PDFs cannot be imported: their streams are encrypted, so
+		// parsing continues into data that only produces unrelated decoding
+		// errors. Report the real cause before any object is resolved.
+		if err = this.checkEncrypted(); err != nil {
+			return err
 		}
 
 		// Read catalog
