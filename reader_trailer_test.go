@@ -26,6 +26,13 @@ func TestBrokenTrailerOrCatalogIsAnError(t *testing.T) {
 			}), []byte("/Root 1 0 R"), []byte("/Root 42"), 1),
 			wantErr: "not an object reference",
 		},
+		{
+			name: "trailer /Root points at a missing object",
+			pdf: bytes.Replace(classicPDF(map[int]string{
+				1: "<< /Type /Catalog /Pages 2 0 R >>",
+			}), []byte("/Root 1 0 R"), []byte("/Root 9 0 R"), 1),
+			wantErr: "Failed to resolve root object",
+		},
 		{name: "catalog is not a dictionary", pdf: classicPDF(map[int]string{1: "42"}), wantErr: "not a dictionary"},
 		{name: "catalog without /Pages", pdf: classicPDF(map[int]string{1: "<< /Type /Catalog >>"}), wantErr: "no /Pages"},
 	}

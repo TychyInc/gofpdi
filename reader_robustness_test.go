@@ -38,6 +38,17 @@ func parserFixtures() map[string][]byte {
 	hybrid.classicXrefRange(0, 8, fmt.Sprintf(" /XRefStm %d", xrefStreamOffset))
 	fixtures["hybrid reference"] = hybrid.bytes()
 
+	// A hybrid-reference file whose /XRefStm points past the end of the data.
+	// Producers leave the offset of a revision they dropped, and the classic
+	// table of the same revision still lists every uncompressed object.
+	dangling := newPDF("1.5")
+	dangling.object(1, "<< /Type /Catalog /Pages 2 0 R >>")
+	dangling.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+	dangling.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << >> >>")
+	dangling.stream(4, "", []byte("q Q\n"))
+	dangling.classicXrefRange(0, 5, fmt.Sprintf(" /XRefStm %d", dangling.offset()+100000))
+	fixtures["hybrid reference with a dropped revision"] = dangling.bytes()
+
 	update := newPDF("1.5")
 	update.object(1, "<< /Type /Catalog /Pages 2 0 R >>")
 	update.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
