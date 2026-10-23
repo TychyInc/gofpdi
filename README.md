@@ -50,9 +50,14 @@ Changes against upstream:
   inherited from the page tree, and `Importer.GetTemplateSize` reports the size of an imported
   template. The `/Parent` chain walked for an inherited box or `/Rotate` is checked for cycles, so a
   page that points at itself or at another page is reported instead of overflowing the stack.
+- Writer: the imported objects are written in object number order and the entries of a dictionary
+  in key order, so importing the same file twice produces the same bytes instead of following Go's
+  randomized map iteration.
 - Tests: regression tests for every fix above, a CI job running `go test -race ./...`, and
   [prek](https://github.com/j178/prek) Git hooks. The parser is also cut at every byte offset of
   each supported layout and exposed as a fuzz target (`go test -fuzz=FuzzNewPdfReaderFromStream`).
+  Imports are covered end to end: two runs over one file and eight importers running in parallel
+  all have to produce the same objects.
 
 ### Using this fork
 

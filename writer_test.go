@@ -459,3 +459,33 @@ func TestImportPageInheritsRotation(t *testing.T) {
 		t.Fatalf("template size = %vx%v, want the rotated 842x595", tpl.W, tpl.H)
 	}
 }
+
+// TestWriteValueDictionaryIsOrdered checks that a dictionary is written in key
+// order. Go's map iteration is randomized, so the same import used to produce a
+// different byte stream on every run, which makes two imports of one document
+// differ. The order of the entries does not matter to a PDF reader.
+func TestWriteValueDictionaryIsOrdered(t *testing.T) {
+	value := &PdfValue{Type: PDF_TYPE_DICTIONARY, Dictionary: map[string]*PdfValue{
+		"/F": {Type: PDF_TYPE_NUMERIC, Int: 3},
+		"/A": {Type: PDF_TYPE_NUMERIC, Int: 1},
+		"/Z": {Type: PDF_TYPE_NUMERIC, Int: 4},
+		"/B": {Type: PDF_TYPE_DICTIONARY, Dictionary: map[string]*PdfValue{
+			"/X": {Type: PDF_TYPE_NUMERIC, Int: 2},
+			"/W": {Type: PDF_TYPE_NUMERIC, Int: 9},
+		}},
+	}}
+
+	const want = "<</A 1 /B <</W 9 /X 2 >>/F 3 /Z 4 >>"
+
+	for run := 0; run < 20; run++ {
+		writer := &PdfWriter{}
+		writer.Init()
+		writer.r = &PdfReader{sourceFile: "test.pdf"}
+		writer.current_obj = &PdfObject{id: &PdfObjectId{id: 1}, buffer: new(bytes.Buffer)}
+
+		writer.writeValue(value)
+		if got := writer.current_obj.buffer.String(); got != want {
+			t.Fatalf("run %d: writeValue = %q, want %q", run, got, want)
+		}
+	}
+}
