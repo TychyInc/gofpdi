@@ -74,3 +74,44 @@ func TestXrefStreamWithoutSizeOrIndex(t *testing.T) {
 		t.Fatalf("err = %v, want it to mention /Size", err)
 	}
 }
+
+// TestReadRejectsEncryptedPDF covers files that declare /Encrypt, both with a
+// classic trailer and with a cross-reference stream. The parser used to read
+// them until a stream failed to inflate, so the error described the symptom
+// ("zlib: invalid header") instead of the cause.
+func TestReadRejectsEncryptedPDF(t *testing.T) {
+	tests := []struct {
+		name string
+		pdf  []byte
+	}{
+		{
+			name: "classic trailer",
+			pdf: func() []byte {
+				b := newPDF("1.5")
+				b.object(1, "<< /Type /Catalog /Pages 2 0 R >>")
+				b.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+				b.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << >> >>")
+				b.stream(4, "", []byte("q Q\n"))
+				b.object(5, "<< /Filter /Standard /V 2 /R 3 /O <00> /U <00> /P -4 >>")
+				b.classicXrefRange(0, 6, " /Encrypt 5 0 R")
+				return b.bytes()
+			}(),
+		},
+		{
+			name: "cross-reference stream dictionary",
+			pdf: streamXrefPDF("0 0 595 842", xrefStreamOptions{
+				Filter: filterFlate,
+				Extra:  " /Encrypt 9 0 R",
+			}).bytes(),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewPdfReaderFromStream("encrypted.pdf", bytes.NewReader(test.pdf))
+			if err == nil || !strings.Contains(err.Error(), "Encrypted PDF is not supported") {
+				t.Fatalf("err = %v, want it to report an encrypted PDF", err)
+			}
+		})
+	}
+}

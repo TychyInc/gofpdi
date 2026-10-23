@@ -117,18 +117,3 @@ func TestReadUintBE(t *testing.T) {
 		t.Fatalf("readUintBE(offset 3, 1 byte) = %#x", got)
 	}
 }
-
-func TestFilterPaeth(t *testing.T) {
-	// With a zero residual every byte is predicted from the previous row, so
-	// the filtered data equals the previous row.
-	cdat := []byte{1, 2, 3}
-	pdat := []byte{10, 20, 30}
-	filterPaeth(cdat, pdat, 1)
-
-	want := []byte{11, 22, 33}
-	for i := range want {
-		if cdat[i] != want[i] {
-			t.Fatalf("filterPaeth = %v, want %v", cdat, want)
-		}
-	}
-}

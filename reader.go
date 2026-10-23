@@ -1009,22 +1009,29 @@ func (this *PdfReader) readXref() error {
 
 					// Check for /DecodeParms
 					paethDecode := false
-					if _, ok := v.Dictionary["/DecodeParms"]; ok {
-						columns := 0
+					parms, err := xrefDecodeParms(v.Dictionary["/DecodeParms"])
+					if err != nil {
+						return err
+					}
+					if parms != nil {
 						predictor := 0
-
-						if _, ok2 := v.Dictionary["/DecodeParms"].Dictionary["/Columns"]; ok2 {
-							columns = v.Dictionary["/DecodeParms"].Dictionary["/Columns"].Int
-						}
-						if _, ok2 := v.Dictionary["/DecodeParms"].Dictionary["/Predictor"]; ok2 {
-							predictor = v.Dictionary["/DecodeParms"].Dictionary["/Predictor"].Int
+						if value, ok := parms.Dictionary["/Predictor"]; ok {
+							predictor = value.Int
 						}
 
-						if predictor > 15 {
+						switch {
+						case predictor == 0 || predictor == 1:
+							// No prediction: every row is stored as it is.
+						case predictor >= 10 && predictor <= 15:
+							// PNG prediction: every row starts with a filter byte.
+							paethDecode = true
+						case predictor > 15:
 							return errors.New("Unsupported /DecodeParms - /Predictor must be <= 15")
+						default:
+							// Predictor 2 (TIFF) and the reserved values 3-9 reorder the
+							// bytes without per-row filter bytes, which is not supported.
+							return errors.Errorf("Unsupported /DecodeParms - /Predictor %d", predictor)
 						}
-						_ = columns
-						paethDecode = true
 					}
 
 					/*
@@ -1416,15 +1423,23 @@ func (this *PdfReader) readXref() error {
 	// in a cross-reference stream referenced by /XRefStm. The classic table lists
 	// those objects as free entries, so the stream has to be read as part of this
 	// revision before older revisions are merged.
+	//
+	// Some producers write the offset of a revision that is no longer in the
+	// file, which leaves /XRefStm pointing past the end of the data. The classic
+	// table of the same revision lists every uncompressed object, so the file
+	// remains readable: the stream is skipped, and an object that only lives in
+	// the missing stream surfaces as a resolution error when it is needed.
 	if xrefStm, ok := trailer.Dictionary["/XRefStm"]; ok {
-		previousPos := this.xrefPos
-		this.xrefPos = xrefStm.Int
-		this.overrideFreeEntries = true
-		xrefErr := this.readXref()
-		this.overrideFreeEntries = false
-		this.xrefPos = previousPos
-		if xrefErr != nil {
-			return errors.Wrap(xrefErr, "Failed to read /XRefStm")
+		if this.looksLikeXref(xrefStm.Int) {
+			previousPos := this.xrefPos
+			this.xrefPos = xrefStm.Int
+			this.overrideFreeEntries = true
+			xrefErr := this.readXref()
+			this.overrideFreeEntries = false
+			this.xrefPos = previousPos
+			if xrefErr != nil {
+				return errors.Wrap(xrefErr, "Failed to read /XRefStm")
+			}
 		}
 	}
 
@@ -1434,6 +1449,22 @@ func (this *PdfReader) readXref() error {
 		this.overrideFreeEntries = false
 		this.xrefPos = tr.Int
 		return this.readXref()
+	}
+
+	return nil
+}
+
+// checkEncrypted reports PDFs that declare an /Encrypt dictionary. Encrypting the
+// streams is the default, so the importer cannot read the content; permission
+// protection with an owner password also sets /Encrypt and is unsupported for the
+// same reason.
+func (this *PdfReader) checkEncrypted() error {
+	if this.trailer == nil {
+		return nil
+	}
+
+	if _, ok := this.trailer.Dictionary["/Encrypt"]; ok {
+		return errors.New("Encrypted PDF is not supported")
 	}
 
 	return nil
@@ -1809,6 +1840,33 @@ func (this *PdfReader) dictionaryFilters(dictionary map[string]*PdfValue) ([]*Pd
 	return filters, nil
 }
 
+// xrefDecodeParms returns the /DecodeParms dictionary that applies to the last
+// filter of a cross-reference stream. /DecodeParms is either a dictionary or,
+// when /Filter lists several filters, an array with one entry per filter; a null
+// entry means "no parameters". Only the last filter shapes the final output,
+// so its entry is the one that can carry a predictor.
+func xrefDecodeParms(value *PdfValue) (*PdfValue, error) {
+	if value == nil || value.Type == PDF_TYPE_NULL {
+		return nil, nil
+	}
+
+	if value.Type == PDF_TYPE_ARRAY {
+		if len(value.Array) == 0 {
+			return nil, nil
+		}
+		value = value.Array[len(value.Array)-1]
+		if value.Type == PDF_TYPE_NULL {
+			return nil, nil
+		}
+	}
+
+	if value.Type != PDF_TYPE_DICTIONARY {
+		return nil, errors.New("Cross-reference stream /DecodeParms is not a dictionary")
+	}
+
+	return value, nil
+}
+
 // decodeStreamFilter decodes stream bytes with a single PDF filter. Only the
 // filters that can appear in page content and object streams are supported; any
 // other filter returns an error instead of panicking the caller.
@@ -2155,6 +2213,13 @@ func (this *PdfReader) read() error {
 		err = this.readXref()
 		if err != nil {
 			return errors.Wrap(err, "Failed to read xref table")
+		}
+
+		// Encrypted PDFs cannot be imported: their streams are encrypted, so
+		// parsing continues into data that only produces unrelated decoding
+		// errors. Report the real cause before any object is resolved.
+		if err = this.checkEncrypted(); err != nil {
+			return err
 		}
 
 		// Read catalog

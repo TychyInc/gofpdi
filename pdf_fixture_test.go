@@ -51,9 +51,13 @@ type xrefStreamOptions struct {
 	// as they are.
 	Filter string
 	// Predictor adds /DecodeParms and writes the rows with PNG prediction.
-	// RowFilters is cycled over the rows and defaults to Up (2).
+	// RowFilters is cycled over the rows and defaults to Up (2). A predictor of
+	// 1 (no prediction) stores the rows as they are.
 	Predictor  int
 	RowFilters []byte
+	// DecodeParms overrides the /DecodeParms entry. The rows are still encoded
+	// according to Predictor so that array forms can be written.
+	DecodeParms string
 	// Prev adds /Prev. Use previousXref to link to the previous section of the
 	// file being built.
 	Prev int
@@ -237,7 +241,9 @@ func (b *pdfBuilder) xrefStream(id int, opts xrefStreamOptions) int {
 	if opts.Filter != filterNone {
 		dict += " /Filter " + opts.Filter
 	}
-	if opts.Predictor != 0 {
+	if opts.DecodeParms != "" {
+		dict += " /DecodeParms " + opts.DecodeParms
+	} else if opts.Predictor != 0 {
 		dict += fmt.Sprintf(" /DecodeParms << /Predictor %d /Columns %d >>",
 			opts.Predictor, widths[0]+widths[1]+widths[2])
 	}
@@ -330,7 +336,7 @@ func (b *pdfBuilder) encodeXrefStream(ranges [][2]int, widths [3]int, opts xrefS
 			pos += widths[1]
 			putBigEndian(row[pos:], entry.field3, widths[2])
 
-			if opts.Predictor == 0 {
+			if opts.Predictor <= 1 {
 				rows.Write(row)
 				rowNum++
 				continue
@@ -347,8 +353,10 @@ func (b *pdfBuilder) encodeXrefStream(ranges [][2]int, widths [3]int, opts xrefS
 	}
 
 	// An unknown filter is written as it is: the reader has to reject it.
+	// Brackets in /Filter ("[/FlateDecode]") are accepted so that tests can pair
+	// the array form with an array of /DecodeParms.
 	var encoded []byte
-	switch opts.Filter {
+	switch strings.Trim(opts.Filter, "[]") {
 	case filterFlate:
 		encoded = flateBytes(rows.Bytes())
 	case filterASCII85:

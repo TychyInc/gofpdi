@@ -30,8 +30,12 @@ Changes against upstream:
   a `/Filter` that is neither a name nor an array, an array entry that is not a name, and an
   ASCII85 group that overflows 32 bits are reported as errors, while a null `/Filter` is treated
   as an absent entry.
-- `/DecodeParms`: `/Columns` greater than 4, and all PNG row filter types when a cross-reference
-  stream uses a predictor.
+- `/DecodeParms`: the predictor is read from the last entry, so a dictionary, an array (one entry per
+  `/Filter`) and `null` all work; predictor 1 stores the rows as they are, 10-15 use the PNG row
+  filter bytes, and TIFF prediction (2), the reserved values 3-9 and predictors above 15 are
+  reported as errors.
+- Cross-reference streams: a `/XRefStm` that points past the end of the file is skipped instead of
+  rejecting the file, since the classic table of the same revision lists the uncompressed objects.
 - Object streams: the token stack is isolated per object, so one object cannot corrupt the next.
 - Page tree: the pages are counted by walking the tree, so a `/Count` that disagrees with it is not
   fatal; a missing `/Kids` or `/Type`, a node that is not a dictionary, and an indirect `/Kids` are
@@ -39,6 +43,9 @@ Changes against upstream:
   is reported instead of overflowing the stack.
 - Damaged input: a `startxref` candidate is used only if it really points at a cross-reference
   section, field widths are limited to 8 bytes, and the entry count is taken from the decoded data.
+- Encrypted PDFs (`/Encrypt`, including owner-password-only permission protection) are rejected with
+  `Encrypted PDF is not supported`, so the caller is not left with the zlib error an encrypted stream
+  produces.
 - Import: each page is imported with its own page boxes, only `/MediaBox` and `/CropBox` are
   inherited from the page tree, and `Importer.GetTemplateSize` reports the size of an imported
   template.

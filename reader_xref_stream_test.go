@@ -141,6 +141,70 @@ func TestReadXrefStreamWithPredictors(t *testing.T) {
 	assertReadablePage(t, b.bytes(), 595, 842, "q Q\n")
 }
 
+// TestReadXrefStreamWithoutPrediction covers /DecodeParms << /Predictor 1 >>.
+// Predictor 1 is legal and means "no prediction", so the rows carry no filter
+// byte. Treating every /DecodeParms as PNG prediction rejected these files with
+// "Incomplete xref stream entry" because the extra filter byte was assumed.
+func TestReadXrefStreamWithoutPrediction(t *testing.T) {
+	pdf := streamXrefPDF("0 0 595 842", xrefStreamOptions{
+		Filter:    filterFlate,
+		Predictor: 1,
+	}).bytes()
+
+	assertReadablePage(t, pdf, 595, 842, "q Q\n")
+}
+
+// TestReadXrefStreamWithDecodeParmsArray covers the array form of
+// /DecodeParms, which a stream with a /Filter array uses: one entry per filter,
+// and only the entry of the last filter describes the final row layout.
+func TestReadXrefStreamWithDecodeParmsArray(t *testing.T) {
+	tests := []struct {
+		name      string
+		parms     string
+		predictor int
+		rows      []byte
+	}{
+		{
+			name:      "predictor of the last filter",
+			parms:     "[<< /Predictor 12 /Columns 7 >>]",
+			predictor: 12,
+			rows:      []byte{1, 4, 0},
+		},
+		{
+			name:  "null entry means no parameters",
+			parms: "[null]",
+		},
+		{
+			name:  "empty array means no parameters",
+			parms: "[]",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pdf := streamXrefPDF("0 0 595 842", xrefStreamOptions{
+				Filter:      "[/FlateDecode]",
+				Predictor:   test.predictor,
+				RowFilters:  test.rows,
+				DecodeParms: test.parms,
+			}).bytes()
+
+			assertReadablePage(t, pdf, 595, 842, "q Q\n")
+		})
+	}
+}
+
+// TestReadXrefStreamWithNullDecodeParms covers /DecodeParms null, which means
+// that the filter has no parameters.
+func TestReadXrefStreamWithNullDecodeParms(t *testing.T) {
+	pdf := streamXrefPDF("0 0 595 842", xrefStreamOptions{
+		Filter:      filterFlate,
+		DecodeParms: "null",
+	}).bytes()
+
+	assertReadablePage(t, pdf, 595, 842, "q Q\n")
+}
+
 // TestReadXrefStreamRejectsInvalidPredictorData checks the checks applied to a
 // cross-reference stream dictionary and to the decoded entry data.
 func TestReadXrefStreamRejectsInvalidPredictorData(t *testing.T) {
@@ -160,6 +224,18 @@ func TestReadXrefStreamRejectsInvalidPredictorData(t *testing.T) {
 			old:     "/Filter /FlateDecode",
 			new:     "/DecodeParms << /Predictor 16 /Columns 7 >> /Filter /FlateDecode",
 			wantErr: "Predictor",
+		},
+		{
+			name:    "TIFF predictor is not supported",
+			old:     "/Filter /FlateDecode",
+			new:     "/DecodeParms << /Predictor 2 /Columns 7 >> /Filter /FlateDecode",
+			wantErr: "Predictor",
+		},
+		{
+			name:    "decode parms is not a dictionary",
+			old:     "/Filter /FlateDecode",
+			new:     "/DecodeParms /Predictor /Filter /FlateDecode",
+			wantErr: "DecodeParms",
 		},
 		{
 			name:    "index without pairs",
@@ -222,6 +298,22 @@ func TestReadHybridReferenceFile(t *testing.T) {
 	// The classic table lists the compressed object as free and points at the
 	// stream through /XRefStm, which is what hybrid-reference producers write.
 	b.classicXrefRange(0, 8, fmt.Sprintf(" /XRefStm %d", xrefStreamOffset))
+
+	assertReadablePage(t, b.bytes(), 595, 842, "q Q\n")
+}
+
+// TestReadHybridReferenceFileWithUnreachableXRefStm covers a hybrid-reference
+// file whose /XRefStm points past the end of the file. Producers occasionally
+// leave the offset of a revision they dropped; the classic table of the same
+// revision still lists every uncompressed object, so the file stays readable.
+func TestReadHybridReferenceFileWithUnreachableXRefStm(t *testing.T) {
+	b := newPDF("1.5")
+	b.object(1, "<< /Type /Catalog /Pages 2 0 R >>")
+	b.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 >>")
+	b.object(3, "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << >> >>")
+	b.stream(4, "", []byte("q Q\n"))
+
+	b.classicXrefRange(0, 5, fmt.Sprintf(" /XRefStm %d", b.offset()+100000))
 
 	assertReadablePage(t, b.bytes(), 595, 842, "q Q\n")
 }
