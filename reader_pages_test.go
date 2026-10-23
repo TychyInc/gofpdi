@@ -2,6 +2,7 @@ package gofpdi
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +64,31 @@ func TestGetPageRotationDefaultsToZero(t *testing.T) {
 	}
 	if rotation.Int != 0 {
 		t.Fatalf("default rotation = %d, want 0", rotation.Int)
+	}
+}
+
+// TestPageBoxParentCannotBeResolved covers an inherited page box whose /Parent
+// points at an object the file does not contain.
+func TestPageBoxParentCannotBeResolved(t *testing.T) {
+	reader := newTestReader(t, parentChainPDF("<< /Type /Page /Parent 9 0 R >>", nil))
+
+	if _, err := reader.getPageBoxes(1, 1); err == nil || !strings.Contains(err.Error(), "Could not resolve parent object") {
+		t.Fatalf("getPageBoxes error = %v, want the dangling /Parent to be reported", err)
+	}
+}
+
+// TestDanglingRotateIsAnError covers a /Rotate that points at an object the file
+// does not contain. The page boxes still resolve, so only the rotation walk
+// reports the broken reference.
+func TestDanglingRotateIsAnError(t *testing.T) {
+	reader := newTestReader(t, parentChainPDF(
+		"<< /Type /Page /MediaBox [0 0 595 842] /CropBox [0 0 595 842] /Rotate 9 0 R >>", nil))
+
+	if _, err := reader.getPageBoxes(1, 1); err != nil {
+		t.Fatalf("unexpected page box error: %v", err)
+	}
+	if _, err := reader.getPageRotation(1); err == nil || !strings.Contains(err.Error(), "Failed to resolve rotate object") {
+		t.Fatalf("getPageRotation error = %v, want the dangling /Rotate to be reported", err)
 	}
 }
 
