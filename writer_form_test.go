@@ -2,6 +2,7 @@ package gofpdi
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -55,6 +56,57 @@ func TestPutFormXobjectsUsesBoxOrigin(t *testing.T) {
 	}
 	if !bytes.Contains([]byte(body), []byte("/Matrix [")) || !bytes.Contains([]byte(body), []byte("-10.00000 -20.00000")) {
 		t.Fatalf("box origin was not translated:\n%s", body)
+	}
+}
+
+// TestPutFormXobjectsWritesImportedStreams checks an object of the imported page
+// resources whose value is a stream. The image keeps its dictionary and payload
+// and the form XObject refers to the rewritten object number. Scanned pages
+// reference their images this way, and writing only the dictionary would leave
+// the imported page pointing at an empty image.
+func TestPutFormXobjectsWritesImportedStreams(t *testing.T) {
+	image := []byte{0x01, 0x02, 0x03, 0x04}
+
+	b := newPDF("1.5")
+	b.object(1, "<< /Type /Catalog /Pages 2 0 R >>")
+	b.object(2, "<< /Type /Pages /Kids [3 0 R] /Count 1 /MediaBox [0 0 595 842] >>")
+	b.object(3, "<< /Type /Page /Parent 2 0 R /Resources << /XObject << /Im1 5 0 R >> >> /Contents 4 0 R >>")
+	b.stream(4, "", []byte("q /Im1 Do Q\n"))
+	b.object(5, fmt.Sprintf("<< /Type /XObject /Subtype /Image /Width 2 /Height 2"+
+		" /ColorSpace /DeviceGray /BitsPerComponent 8 /Length %d >>\nstream\n%s\nendstream",
+		len(image), image))
+	b.classicXref("")
+
+	reader := newTestReader(t, b.bytes())
+	writer := newTestWriter(t)
+
+	if _, err := writer.ImportPage(reader, 1, "/MediaBox"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	names, err := writer.PutFormXobjects(reader)
+	if err != nil {
+		t.Fatalf("failed to put form xobjects: %v", err)
+	}
+	form := formXObjectBody(t, writer, names, "/GOFPDITPL0")
+
+	imageID := -1
+	imageBody := ""
+	for id, content := range writer.GetImportedObjects() {
+		if bytes.Contains(content, []byte("/Subtype /Image")) {
+			imageID, imageBody = id.id, string(content)
+		}
+	}
+	if imageID < 0 {
+		t.Fatalf("the image stream was not written:\n%s", form)
+	}
+	if !bytes.Contains([]byte(imageBody), image) {
+		t.Fatalf("the image payload is missing:\n%s", imageBody)
+	}
+	if !bytes.Contains([]byte(imageBody), []byte("/Width 2")) {
+		t.Fatalf("the image dictionary is missing:\n%s", imageBody)
+	}
+	if ref := fmt.Sprintf("/Im1 %d 0 R", imageID); !bytes.Contains([]byte(form), []byte(ref)) {
+		t.Fatalf("the form XObject should refer to %q:\n%s", ref, form)
 	}
 }
 

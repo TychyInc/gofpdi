@@ -30,8 +30,12 @@ Changes against upstream:
   a `/Filter` that is neither a name nor an array, an array entry that is not a name, and an
   ASCII85 group that overflows 32 bits are reported as errors, while a null `/Filter` is treated
   as an absent entry.
-- `/DecodeParms`: `/Columns` greater than 4, and all PNG row filter types when a cross-reference
-  stream uses a predictor.
+- `/DecodeParms`: the predictor is read from the last entry, so a dictionary, an array (one entry per
+  `/Filter`) and `null` all work; predictor 1 stores the rows as they are, 10-15 use the PNG row
+  filter bytes, and TIFF prediction (2), the reserved values 3-9 and predictors above 15 are
+  reported as errors.
+- Cross-reference streams: a `/XRefStm` that points past the end of the file is skipped instead of
+  rejecting the file, since the classic table of the same revision lists the uncompressed objects.
 - Object streams: the token stack is isolated per object, so one object cannot corrupt the next.
 - Page tree: the pages are counted by walking the tree, so a `/Count` that disagrees with it is not
   fatal; a missing `/Kids` or `/Type`, a node that is not a dictionary, and an indirect `/Kids` are
