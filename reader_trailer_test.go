@@ -19,6 +19,13 @@ func TestBrokenTrailerOrCatalogIsAnError(t *testing.T) {
 		wantErr string
 	}{
 		{name: "trailer without /Root", pdf: withoutRoot, wantErr: "no /Root"},
+		{
+			name: "trailer /Root is not a reference",
+			pdf: bytes.Replace(classicPDF(map[int]string{
+				1: "<< /Type /Catalog /Pages 2 0 R >>",
+			}), []byte("/Root 1 0 R"), []byte("/Root 42"), 1),
+			wantErr: "not an object reference",
+		},
 		{name: "catalog is not a dictionary", pdf: classicPDF(map[int]string{1: "42"}), wantErr: "not a dictionary"},
 		{name: "catalog without /Pages", pdf: classicPDF(map[int]string{1: "<< /Type /Catalog >>"}), wantErr: "no /Pages"},
 	}

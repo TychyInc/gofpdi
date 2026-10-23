@@ -16,6 +16,21 @@ func TestGetPageResourcesRejectsParentCycle(t *testing.T) {
 	}
 }
 
+func TestGetPageResourcesRejectsNonDictionaryAncestor(t *testing.T) {
+	// The page has no /Resources, so the walk follows /Parent to a node that is
+	// not a dictionary. It used to index the value without checking its type.
+	reader := newTestReader(t, classicPDF(map[int]string{
+		1: "<< /Type /Catalog /Pages 2 0 R >>",
+		2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+		3: "<< /Type /Page /Parent 4 0 R >>",
+		4: "42",
+	}))
+
+	if _, err := reader.getPageResources(1); err == nil || !strings.Contains(err.Error(), "not a dictionary") {
+		t.Fatalf("error = %v, want a non-dictionary ancestor error", err)
+	}
+}
+
 func TestImportPageInheritsNearestResources(t *testing.T) {
 	for _, test := range []struct {
 		name            string
