@@ -55,12 +55,12 @@ Changes against upstream:
 ### Using this fork
 
 The module path stays `github.com/phpdave11/gofpdi` so that a `replace` directive works. Tags
-`v1.0.16` and later are cut in this repository (the newest one is `v1.0.25`):
+`v1.0.16` and later are cut in this repository (the newest one is `v1.0.26`):
 
 ```
 require github.com/phpdave11/gofpdi v1.0.15
 
-replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.25
+replace github.com/phpdave11/gofpdi => github.com/TychyInc/gofpdi v1.0.26
 ```
 
 Because of that module path, `go get github.com/TychyInc/gofpdi` on its own fails with "module
