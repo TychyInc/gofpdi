@@ -553,7 +553,7 @@ func (this *PdfWriter) UseTemplate(tplid int, _x float64, _y float64, _w float64
 	_x += tpl.X
 	_y += tpl.Y
 
-	wh := this.getTemplateSize(0, _w, _h)
+	wh := this.getTemplateSize(tplid, _w, _h)
 
 	_w = wh["w"]
 	_h = wh["h"]

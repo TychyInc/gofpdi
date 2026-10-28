@@ -13,7 +13,13 @@ type Importer struct {
 	tplMap        map[int]*TplInfo
 	tplN          int
 	writer        *PdfWriter
-	importedPages map[string]int
+	importedPages map[importedPageKey]int
+}
+
+type importedPageKey struct {
+	source string
+	page   int
+	box    string
 }
 
 type TplInfo struct {
@@ -58,7 +64,7 @@ func (this *Importer) init() {
 	this.writers = make(map[string]*PdfWriter, 0)
 	this.tplMap = make(map[int]*TplInfo, 0)
 	this.writer, _ = NewPdfWriter("")
-	this.importedPages = make(map[string]int, 0)
+	this.importedPages = make(map[importedPageKey]int)
 }
 
 func (this *Importer) SetSourceFile(f string) {
@@ -131,8 +137,8 @@ func (this *Importer) GetPageSizes() map[int]map[string]map[string]float64 {
 }
 
 func (this *Importer) ImportPage(pageno int, box string) int {
-	// If page has already been imported, return existing tplN
-	pageNameNumber := fmt.Sprintf("%s-%04d", this.sourceFile, pageno)
+	// Reuse only imports of the same source, page and requested box.
+	pageNameNumber := importedPageKey{source: this.sourceFile, page: pageno, box: box}
 	if _, ok := this.importedPages[pageNameNumber]; ok {
 		return this.importedPages[pageNameNumber]
 	}
